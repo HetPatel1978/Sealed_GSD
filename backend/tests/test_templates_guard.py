@@ -67,3 +67,26 @@ def test_call_scripts_only_state_ledger_prices():
     msg = build(DECISIONS[4])
     assert re.findall(r"\$[\d,]+", msg.body) == ["$30,690"]
     assert "Do not agree to anything" in msg.fo_instruction
+
+
+def test_ungrounded_number_near_ceiling_is_blocked_but_allowed_prices_are_not():
+    from sealed.private import vault
+    from sealed.private.secret_checker import SecretChecker
+    vault.store("job_g", 31000.0)
+    try:
+        g = Guard(SecretChecker("job_g"))
+        msg = build(Decision("a", "price_match", "price_match", round=2, own_price=31240.0,
+                             cited_quote_id="q_05", cited_price=30690.0))     # both within 2% of 31,000
+        assert g.check(msg).passed
+        # Fo's preview slips in a number near the ceiling that is not from the ledger
+        res = g.check(msg, preview=msg.body + " The buyer could also go to $31,100.")
+        failed = {r["rule"] for r in res.rules if not r["passed"]}
+        assert {"secret_checker", "leverage_grounded"} <= failed
+        # spelled out, no $ sign: only the secret checker can catch it
+        res = g.check(msg, preview=msg.body + " Maybe thirty-one thousand.")
+        assert "secret_checker" in {r["rule"] for r in res.rules if not r["passed"]}
+        # the target near the ceiling is allowed in a counter
+        counter = build(Decision("a", "counter", "counter", round=2, offer=30600.0, own_price=30690.0))
+        assert g.check(counter).passed
+    finally:
+        vault.forget("job_g")

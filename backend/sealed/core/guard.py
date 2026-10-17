@@ -38,6 +38,14 @@ def money_values(text: str) -> list[float]:
     return [float(m.group(1).replace(",", "") + ("." + m.group(2) if m.group(2) else "")) for m in MONEY.finditer(text)]
 
 
+def mask_allowed(text: str, allowed: frozenset[float]) -> str:
+    """Replaces "$X" money values that are in `allowed` with a neutral token. Everything else stays."""
+    def sub(m: re.Match) -> str:
+        value = float(m.group(1).replace(",", "") + ("." + m.group(2) if m.group(2) else ""))
+        return "[allowed price]" if value in allowed else m.group(0)
+    return MONEY.sub(sub, text)
+
+
 class Guard:
     def __init__(self, checker: Checker):
         self._checker = checker
@@ -47,7 +55,10 @@ class Guard:
         text = preview if preview is not None else msg.body
         rules = []
 
-        rules.append({"rule": "secret_checker", "passed": not self._checker.contains_secret(text)})
+        # Allowed prices (ledger quotes, the target, the approved price) are true and reveal nothing, even near
+        # the ceiling; blocking them would make our behaviour depend on the ceiling. Mask them, check the rest.
+        rules.append({"rule": "secret_checker",
+                      "passed": not self._checker.contains_secret(mask_allowed(text, msg.allowed_prices))})
         rules.append({"rule": "limit_language", "passed": not BUDGET_WORDS.search(text)})
 
         unknown = [v for v in money_values(text) if v not in msg.allowed_prices]

@@ -1,4 +1,5 @@
 import ast
+from dataclasses import replace
 import json
 import subprocess
 import sys
@@ -56,15 +57,28 @@ def test_offers_are_target_or_null_and_spoken_prices_never_firm():
             assert e["data"]["firm"] is False
 
 
-def test_guard_blocks_a_true_quote_that_sits_within_2pct_of_the_ceiling():
-    # Ceiling 31,300: Summit's written $30,690 is within 2%, so price-match messages citing it are blocked.
-    eng = run(ceiling=31300.0)
-    ev = eng.log.events
-    blocked = [e for e in ev if e["type"] == "guard.checked" and not e["data"]["passed"]]
-    assert blocked
-    sent_bodies = " ".join(e["data"]["body"] for e in ev if e["type"] == "message.sent")
-    assert "$30,690" not in sent_bodies
-    assert any(e["type"] == "job.needs_human" and e["data"]["reason_code"] == "guard_blocked" for e in ev)
+def _plan(eng):
+    """The outgoing round plan: every message actually sent, with timing and exact text."""
+    return [(e["ts"], e["vendor_id"], e["data"]["kind"], e["data"]["channel"], e["data"]["body"])
+            for e in eng.log.events if e["type"] == "message.sent"]
+
+
+def test_true_quote_within_2pct_of_ceiling_is_cited_and_plan_is_unchanged():
+    # Ceiling 31,300: Summit's written $30,690 (-1.9%) and Harbor's $30,980 (-1.0%) sit inside the band.
+    near, far = run(ceiling=31300.0), run(ceiling=40000.0)
+    assert _plan(near) == _plan(far)
+    bodies = " ".join(b for *_, b in _plan(near))
+    assert "$30,690" in bodies
+    assert not any(e["type"] == "guard.checked" and not e["data"]["passed"] for e in near.log.events)
+    assert [e["type"] for e in near.log.events] == [e["type"] for e in far.log.events]
+
+
+def test_target_within_2pct_of_ceiling_counter_is_sent_and_plan_is_unchanged():
+    job = replace(default_job(), target=30600.0)            # below Summit's $30,690, so Summit is countered
+    near, far = run(job=job, ceiling=31000.0), run(job=job, ceiling=40000.0)
+    counters = [e for e in near.log.events if e["type"] == "message.sent" and e["data"]["kind"] == "counter"]
+    assert counters and counters[0]["data"]["offer"] == 30600.0 and "$30,600" in counters[0]["data"]["body"]
+    assert _plan(near) == _plan(far)
 
 
 def test_needs_human_when_no_quote_is_within_the_ceiling():
