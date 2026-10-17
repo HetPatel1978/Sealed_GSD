@@ -1,4 +1,6 @@
-# Sealed API contract (v0.1)
+# Sealed API contract (v0.2)
+
+v0.2 (2026-10-17): additive only. Optional `guard.checked.stage`, `message.sent.channel`, `quote.parsed.source`, `reply.received.source: call`; `strategy.decided.offer` is always the target or null. See `docs/plan.md` section 2.
 
 Base URL (local): `http://localhost:8000`. All bodies are JSON, all timestamps ISO 8601 UTC, all money is a number in the job's `currency` (e.g. `372.0`).
 
@@ -184,13 +186,13 @@ Sim mode only (`404` in live mode).
 | `job.created` | null | `item`, `spec`, `deadline`, `currency`, `target`, `max_rounds`, `vendors: [{id, name, email, mode}]` |
 | `job.started` | null | `seed` (sim only, else null), `round: 1` |
 | `vendor.contacted` | set | `message_id`, `round` (vendor state becomes `CONTACTED`) |
-| `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Rules: `secret_checker` (yes/no only, never the value), `leverage_grounded`, `commitment_words`, `safety_line`. No budget values ever. |
-| `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body` (the exact email body we asked Fo to send), `offer` (number or null), `cited_quote_id` (price_match only) |
+| `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Rules: `secret_checker` (yes/no only, never the value), `leverage_grounded`, `commitment_words`, `safety_line`. No budget values ever. Optional `stage: "pre_send" | "fo_preview"` (a message can be checked twice: our text, then Fo's confirmation preview). |
+| `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body` (the exact email body we asked Fo to send), `offer` (number or null), `cited_quote_id` (price_match only). Optional `channel: "email" | "call"` (default email); for a call, `body` is the call script and `subject` is null. |
 | `audit.checked` | set | `message_id`, `cc_copy_found: bool`, `matched: bool` (Fo's sent copy equals our body), `diff` (null or short text), `guard_passed: bool` (guard re-run on the actual sent copy) |
-| `reply.received` | set | `reply_id`, `in_reply_to` (message_id), `source: vendor_email | fo_relay`, `from`, `subject`, `text` (seller's own words, quotes/signature stripped), `evidence: {kind, ref}` |
-| `quote.parsed` | set | `reply_id`, `quote_id`, `price_total` (null if none), `price_unit`, `derived_total: bool` (total computed by code from unit x qty), `currency`, `firm: bool`, `hedge_words: []`, `delivery_date`, `meets_deadline: bool`, `meets_spec: bool`, `declined: bool`, `suspicious_instructions: bool`, `numbers_grounded: bool` |
+| `reply.received` | set | `reply_id`, `in_reply_to` (message_id), `source: vendor_email | fo_relay | call` (`call` = Fo's summary of a phone call), `from`, `subject`, `text` (seller's own words, quotes/signature stripped), `evidence: {kind, ref}` |
+| `quote.parsed` | set | `reply_id`, `quote_id`, `price_total` (null if none), `price_unit`, `derived_total: bool` (total computed by code from unit x qty), `currency`, `firm: bool`, `hedge_words: []`, `delivery_date`, `meets_deadline: bool`, `meets_spec: bool`, `declined: bool`, `suspicious_instructions: bool`, `numbers_grounded: bool`. Optional `source: "email" | "call"`; a price heard on a call always has `firm: false` and is never cited to other sellers. |
 | `quote.verified` | set | `subject_id` (quote_id or message_id for a booking), `status: VERIFIED | UNVERIFIED`, `reason`, `evidence: {kind, ref}`. VERIFIED only when the seller's own email is in the user's inbox; a Fo relay alone is UNVERIFIED. |
-| `strategy.decided` | set or null | `round`, `action: counter | price_match | firm_up | propose | needs_human`, `offer` (counter only), `cited_quote_id` + `cited_price` (price_match only), `reason` (plain text, never mentions the ceiling) |
+| `strategy.decided` | set or null | `round`, `action: counter | price_match | firm_up | propose | needs_human`, `offer` (always the job's `target`, or null; never any other number), `cited_quote_id` + `cited_price` (price_match only), `reason` (plain text, never mentions the ceiling) |
 | `proposal.created` | set | `proposal_id`, `quote_id`, `price_total`, `currency`, `delivery_date`, `first_quote`, `savings_abs`, `savings_pct`, `flags: []` |
 | `approval.requested` | set | `proposal_id` |
 | `job.approved` | set | `proposal_id`, `price_total`, `currency`, `delivery_date` (exact echoed terms) |

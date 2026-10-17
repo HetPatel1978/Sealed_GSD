@@ -110,3 +110,23 @@ Two `ask_fo` calls in new conversations at the same instant over one MCP session
 - The new token worked for a read-only `list_fo_conversations` (8 conversations), sent as a plain Bearer header.
 
 **SDK gotcha (important for the adapter):** mcp SDK 2.3 does not remember expiry for tokens loaded from storage. It sends the expired token, gets 401, then starts a **full browser sign-in** instead of refreshing. `backend/sealed/fo/auth.py` fixes this: `FileTokenStorage` records an absolute `expires_at`, and `refresh_if_needed()` refreshes before connecting when under 5 minutes are left.
+
+## T1: read-only introspection (2026-10-17, `spikes/fo_introspect.py`)
+
+- `get_fo_conversation` on the `email` conversation from the Oct 15 vendor reply: metadata only, **no `turns`** (2nd time). Dealer replies are not readable through MCP that way → Gmail IMAP.
+- No `voice` conversations exist yet. MCP-started conversations are titled "ChatGPT".
+- `resources/list`: one `ui://wajo-fo/call` call panel. Templates and prompts: empty.
+- Root `/.well-known/oauth-protected-resource` points to a second server, `https://mcp.api.wajo.ai/mcp` (`wajo-agentmcp`): agent builder with `register_webhook` for `conversation.reply` (public HTTPS URL, payload = Fo's final message ≤ 2,000 chars). Nothing registered or called.
+- Full details: `docs/research/fo_mcp.md` §7.
+
+## T2: Fo about itself (`spikes/fo_ask_self.py`)
+
+`complete` in 23.7 s, no `working`. CLAIMED: calls businesses and can give a transcript/summary; works "from a brief, not a rigid script"; durable memory across conversations; asks before money/irreversible actions; can purchase with a connected card; "replies to outreach I send arrive back in this thread". Details in `docs/research/fo_mcp.md` §7.
+
+## Spike 1c: Fo-voice email (PREPARED, NOT RUN)
+
+`spikes/fo_send_voice_test.py`: dry run by default; `--yes-send` only after Het approves; recipient rfb5381@psu.edu only. Measures preview content (full body/subject/recipient) and answers "yes" only if it all matches; `working`/`get_fo_reply` path; `--tag T --watch 15` watches the per-dealer Fo conversation and new conversations for the reply (tests Fo's "arrives back in this thread" claim). Verbatim/tag on the sent copy: `spikes/gmail_read.py --tag T` (needs `.env`).
+
+## Spike 1d: outbound call (PREPARED, NOT RUN)
+
+`spikes/fo_call_test.py`: dry run by default; `--yes-call` only after Het approves; number from `SEALED_TEST_PHONE` (local `.env`, never committed; masked in logs). Measures confirmation, whether the call happens, script adherence (from Fo's summary), new `voice` conversation + transcript, end-to-end time.

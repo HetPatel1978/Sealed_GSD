@@ -2,7 +2,7 @@
 
 Labels: **DOCUMENTED** = official Wajo hackathon spec (`fo-mcp-hackathon.md`, shared in Discord), unless another link is given. **VERIFIED** = we observed it. **CLAIMED** = Fo said it about itself. **ASSUMED** = our guess. **UNTESTED** = open question for A1.
 
-A1 (live introspection), A3 (asking Fo) and A4 (spike findings) still need to be run in the repo and added below.
+A1 (live introspection), A3 (asking Fo) and A4 (spike findings) are in section 7.
 
 ---
 
@@ -49,7 +49,7 @@ This HTTP endpoint is probably the "API" mentioned on the Luma page. **There are
 | Is there a webhook/event API? | Not in the official spec; only polling via `get_fo_reply` / `get_fo_conversation`. But the tool schema mentions a `conversation.reply` webhook (see §7). Design for polling; ask Wajo. | DOCUMENTED / UNTESTED |
 | How do we avoid duplicate sends on retry? | On timeout, poll `get_fo_reply`; never resend `ask_fo` for the same step. | DOCUMENTED |
 | Can we trigger Fo's outbound call to a seller through MCP? | Not as a tool. Only by asking Fo in text ("call X and ask…"). Whether a transcript comes back is unknown. | DOCUMENTED / UNTESTED |
-| Can we read seller email replies through MCP? | Our spike said no. **But** `list_fo_conversations` lists `email` channel conversations. If Fo's own email threads with sellers show up there, `get_fo_conversation` might return seller replies. | **UNTESTED — top A1 check** |
+| Can we read seller email replies through MCP? | **No** for the email-channel conversation a reply creates: 0 turns (A1, VERIFIED twice). Fo claims replies come back into the original thread; spike 1c tests that. Gmail IMAP is the read path. | VERIFIED / CLAIMED |
 
 ## 6. A1 checklist (to run with `backend/sealed/fo/auth.py`)
 
@@ -59,9 +59,41 @@ This HTTP endpoint is probably the "API" mentioned on the Luma page. **There are
 4. OAuth metadata at `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`.
 5. Time a `get_fo_reply` poll loop and record real latency.
 
-## 7. A3 / A4
+## 7. A1 / A3 / A4
 
-- A3 (ask Fo about itself, no sends): **not yet run.**
+### A1 — live introspection, read-only (2026-10-17, `spikes/fo_introspect.py`)
+
+| Check | Result | Label |
+|---|---|---|
+| `list_fo_conversations` channels | 8 conversations: 7 `chat`, 1 `email` ("Re: Quote request test", the Oct 15 vendor reply). **No `voice` conversation exists.** Conversations our MCP client starts are titled **"ChatGPT"** (Fo labels MCP clients that way). | VERIFIED |
+| `get_fo_conversation` on the `email` conversation | Returns only `conversation` metadata (`conversationId`, `title`, `channel: "email"`, `startedAt`). **No `turns` key at all**; text content is just the title. The vendor's reply is **not readable through MCP**. | VERIFIED (2nd time; same as Oct 15) |
+| → Decision | **Read dealer replies from Gmail IMAP.** Fo CLAIMS replies "arrive back in this thread" (A3); spike 1c watches the per-dealer conversation to test that claim. | VERIFIED + CLAIMED |
+| `get_fo_conversation` on a `voice` conversation | Not possible: none exist. Rerun after spike 1d. | UNTESTED |
+| `resources/list` | One resource: `ui://wajo-fo/call` ("Call Fo", `text/html;profile=mcp-app`): an inline call panel for `start_fo_call`; CSP allows `mcp.api.wajo.ai`, `livekit.api.wajo.ai`; needs microphone. | VERIFIED |
+| `resources/templates/list`, `prompts/list` | Both empty. | VERIFIED |
+| Capabilities | `logging`, `resources` (list_changed), `tools` (list_changed), extension `io.modelcontextprotocol/ui`. | VERIFIED |
+| `/.well-known/oauth-protected-resource/fo` | `resource: https://mcp.api.wajo.ai/fo`, auth server `https://mcp.api.wajo.ai`, bearer in header, scope `mcp`. | VERIFIED |
+| `/.well-known/oauth-protected-resource` (root) | `resource: https://mcp.api.wajo.ai/mcp`: a **second MCP server**. | VERIFIED |
+| `/.well-known/oauth-authorization-server` | Endpoints `/oauth/authorize`, `/oauth/token`, `/oauth/register` (DCR); PKCE S256 only; grants `authorization_code`, `refresh_token`; public clients (`none`). | VERIFIED |
+| Second server `https://mcp.api.wajo.ai/mcp` | `wajo-agentmcp` 0.1.0, tools listable without auth: `build_agent`, `chat_agent`, `get_agent_reply`, `register_webhook`, `list_webhooks`, `test_webhook`, `delete_webhook`, connectors, sessions, `search_documentation`, … An agent-builder API, not Fo itself. | VERIFIED (tool list only; nothing called) |
+| `conversation.reply` webhook | `register_webhook` description: signed POST (Standard Webhooks headers) "whenever one of your conversations finishes a turn (`conversation.reply`)", plus `schedule.fired`, `message.proactive`. Payload: conversation id, run id, channel, final message capped at 2,000 chars. Public HTTPS URL required; max 5 per account. Whether it fires for Fo's email conversations, and what text it carries for a dealer reply, is unknown. **Not registered.** | DOCUMENTED (tool description) / UNTESTED |
+
+### A3 — Fo about itself (2026-10-17, `spikes/fo_ask_self.py`, one new conversation, no sends)
+
+`ask_fo` returned `complete` in 23.7 s (no `working`, no polling). Fo's answers, all **CLAIMED**:
+
+| Question | Fo's answer (condensed, quotes verbatim) |
+|---|---|
+| What can you do? | "research and comparisons, scheduling, email and texts, phone calls to businesses, purchases, documents and spreadsheets, and multi-step errands". |
+| Channels | "email, SMS/iMessage, phone calls, and Telegram (once you link it)". |
+| Call a business + transcript? | "Yes, I can call a business, and afterward I can pull you a transcript or a short summary of the call." |
+| Stick to a script? | "I work from a brief you give me, **not a rigid script**: I make your asks and answer questions that come up, and anything past what you authorized I bring back to you instead of agreeing to." |
+| Memory | "Yes, I keep **durable memory across conversations**: preferences, your people, deadlines, projects". |
+| When it asks for confirmation | "before one-way doors: money, sending anything you didn't explicitly ask for, bookings, cancellations, anything irreversible. Reversible work I just do and report." |
+| Purchases/payments | "yes, with your approval, and a card connected in Wajo payments settings. Without one I can build the whole checkout and hand you the pay step." |
+| `conversation.reply` webhook | "I can't confirm that exists". Also: "**Replies to outreach I send arrive back in this thread on their own**". (Contradicts A1 for the Oct 15 reply; to be tested in spike 1c.) |
+
+**Impact:** durable memory means a ceiling mentioned once, anywhere, could resurface in any later message or call; the "never mention a budget to Fo" rule applies to every chat on the account. "Not a rigid script" means call scripts must be short, true, and end with a written-quote ask; call summaries are audited. Purchases are possible with a connected card: keep **no card connected** to the demo Wajo account (ASSUMED safeguard, to verify in Wajo settings).
 
 ### A4 — what we VERIFIED (from `spikes/FINDINGS.md`, 2026-10-17)
 

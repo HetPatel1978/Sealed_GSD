@@ -2,12 +2,18 @@
 
 Sealed is a negotiation agent built on Wajo's Fo. You describe a job (what, how many, by when), set a target price and a secret ceiling, and list a few sellers. Fo emails each seller from your Wajo account, Sealed reads their replies from your inbox, counters using only true facts (real written quotes, never invented leverage), and asks you to approve the winning deal before anything is booked. The ceiling never leaves Sealed's private core: it is never sent to Fo, to any seller, to any LLM, or to the frontend, and every outgoing message is checked before and after it is sent.
 
+## Design
+
+**Current design: [`docs/architecture.md`](docs/architecture.md)** ("sealed envelope": code decides every fact, Fo does the outreach by email and phone, only the qualifier sees the ceiling). Build plan: [`docs/plan.md`](docs/plan.md); decisions: [`docs/decisions.md`](docs/decisions.md); threats: [`docs/threat_model.md`](docs/threat_model.md); Fo MCP facts: [`docs/research/fo_mcp.md`](docs/research/fo_mcp.md).
+
+`docs/sealed_module_io_flow.png` is **superseded** by `docs/architecture.md` (kept for history). `docs/fo_tools.md` is also superseded by `docs/research/fo_mcp.md`.
+
 ## Layout
 
 ```
 backend/   FastAPI app (Het)
 frontend/  Renu's dashboard, design is hers
-docs/      api.md (API + event contract), fo_tools.md (Fo MCP findings), architecture diagram
+docs/      architecture.md (current design), api.md, plan.md, decisions.md, threat_model.md, research/
 mock/      events.json: one full simulated run as an event stream; check_mock.py validates it
 spikes/    throwaway experiments, not product code
 ```
