@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from sealed.private.secret_checker import numbers_in
+from sealed.core.numbers import numbers_in
 from sealed.sim.run import default_dealers, default_job, run
 
 BACKEND = Path(__file__).resolve().parent.parent

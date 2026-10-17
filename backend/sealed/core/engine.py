@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Protocol
 
 from sealed.core import strategy
+from sealed.core.call_review import review_call
 from sealed.core.events import EventLog
 from sealed.core.guard import Guard
 from sealed.core.ledger import Ledger
@@ -24,6 +25,8 @@ class SendResult:
     sent_at: float
     sent_copy: str | None = None          # the CC copy as delivered (email only)
     errors: list[dict] = field(default_factory=list)   # e.g. a Fo turn timeout that was polled, not resent
+    reason_code: str | None = None        # why it wasn't sent (fo_refused, audit_mismatch, send_unclear, ...)
+    note: str | None = None               # Fo's own words, for the human
 
 
 class Transport(Protocol):
@@ -37,6 +40,15 @@ class Waits:
     round1_close: float = 240
     round2_call_after: float = 180         # after round 1 closes
     round2_close: float = 480
+
+
+NOT_SENT = {
+    "audit_mismatch": "Fo's preview did not match the exact text. Nothing was sent; please review.",
+    "fo_refused": "Fo declined to send this message. Nothing was sent; please review what Fo said.",
+    "fo_failed": "Fo reported a failure. Nothing was sent; please review.",
+    "send_unclear": "Fo's reply didn't clearly say it was sent. Not resent; check Gmail before retrying.",
+    "payment_mention": "Fo's reply mentions a payment, purchase or order. Stopped; please review.",
+}
 
 
 class StaleProposal(Exception):
@@ -66,6 +78,7 @@ class Engine:
         self.price_match_sent: dict[str, float] = {}
         self.last_written_at: dict[str, float] = {}
         self.sent_keys: set[tuple] = set()
+        self.outbound: dict[str, Outbound] = {}
         self.rejected_quotes: set[str] = set()
         self.proposal: dict | None = None
         self.winner: str | None = None
@@ -141,6 +154,15 @@ class Engine:
                 "evidence": {"kind": "gmail_message", "ref": f"{self.job.mode}-{rid}"}})
             self._complete(now + 0.3)
             return now
+
+        if inbound.source == "call" and inbound.turns:
+            sent = self.outbound.get(inbound.in_reply_to or "")
+            flags = review_call(list(inbound.turns), sent.body if sent else "")
+            if flags:
+                self.log.emit(now + 0.1, "job.needs_human", dealer.id, {
+                    "reason_code": "call_review", "blocking": False, "flags": flags,
+                    "message": f"The call with {dealer.name} went outside the brief or touched on money. "
+                               "Review the transcript before relying on anything from it."})
 
         q = self.ledger.add(rid, inbound, now)
         if inbound.source == "email":
@@ -219,6 +241,8 @@ class Engine:
         key = (d.dealer_id, d.round, d.kind, d.channel)
         if key in self.sent_keys:            # dedupe: never send the same step twice
             return t
+        if self.state == "NEEDS_HUMAN":      # a blocking problem pauses all sending until a human looks
+            return t
         if decided:
             self._decided(t, d)
             t += 0.1
@@ -234,6 +258,7 @@ class Engine:
                            "pre-send guard and not sent."})
             return t + 0.2
         self.sent_keys.add(key)
+        self.outbound[msg.message_id] = msg
 
         def approve_preview(preview: str) -> bool:
             res = self.guard.check(msg, preview=preview)
@@ -244,11 +269,17 @@ class Engine:
         for err in result.errors:
             self.log.emit(t + 0.6, "error", d.dealer_id, err)
         if not result.sent:
+            code = result.reason_code or "audit_mismatch"
             self.log.emit(result.sent_at, "job.needs_human", d.dealer_id, {
-                "reason_code": "audit_mismatch", "blocking": True,
-                "message": "Fo's preview did not match the exact text. Nothing was sent; please review."})
+                "reason_code": code, "blocking": True, "message": NOT_SENT.get(code, NOT_SENT["send_unclear"]),
+                **({"fo_said": result.note[:500]} if result.note else {})})
             self.state = "NEEDS_HUMAN"
             return result.sent_at
+        if result.reason_code == "payment_mention":
+            self.log.emit(result.sent_at, "job.needs_human", d.dealer_id, {
+                "reason_code": "payment_mention", "blocking": True, "message": NOT_SENT["payment_mention"],
+                **({"fo_said": result.note[:500]} if result.note else {})})
+            self.state = "NEEDS_HUMAN"
         st = result.sent_at
         self.log.emit(st, "message.sent", d.dealer_id, {
             "message_id": msg.message_id, "kind": msg.kind, "round": msg.round, "channel": msg.channel,

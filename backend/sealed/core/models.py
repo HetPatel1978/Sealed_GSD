@@ -55,6 +55,7 @@ class Inbound:
     parsed: ParsedReply
     in_reply_to: str | None = None
     from_addr: str | None = None
+    turns: tuple[dict, ...] = ()      # call transcript turns ({"role": "assistant"|"user", "text": ...})
 
 
 @dataclass(frozen=True)

@@ -59,7 +59,10 @@ class Guard:
         # the ceiling; blocking them would make our behaviour depend on the ceiling. Mask them, check the rest.
         rules.append({"rule": "secret_checker",
                       "passed": not self._checker.contains_secret(mask_allowed(text, msg.allowed_prices))})
-        rules.append({"rule": "limit_language", "passed": not BUDGET_WORDS.search(text)})
+        scrubbed = text
+        for phrase in SAFETY_PHRASES:       # fixed safety text (incl. call hard limits) says what we WON'T do
+            scrubbed = scrubbed.replace(phrase, "")
+        rules.append({"rule": "limit_language", "passed": not BUDGET_WORDS.search(scrubbed)})
 
         unknown = [v for v in money_values(text) if v not in msg.allowed_prices]
         grounded = {"rule": "leverage_grounded", "passed": not unknown}
@@ -69,9 +72,6 @@ class Guard:
             grounded["detail"] = f"cites written quote {msg.cited_quote_id}"
         rules.append(grounded)
 
-        scrubbed = text
-        for phrase in SAFETY_PHRASES:
-            scrubbed = scrubbed.replace(phrase, "")
         commits = COMMIT_WORDS.findall(scrubbed)
         commit_rule = {"rule": "commitment_words", "passed": not commits or msg.booking_approved}
         if commits and msg.booking_approved:

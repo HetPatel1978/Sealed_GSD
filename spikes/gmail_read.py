@@ -44,15 +44,18 @@ def connect() -> imaplib.IMAP4_SSL:
 
 
 def search(m: imaplib.IMAP4_SSL, raw: str) -> list[bytes]:
-    typ, data = m.search(None, "X-GM-RAW", f'"{raw}"')
+    escaped = raw.replace("\\", "\\\\").replace('"', '\\"')
+    typ, data = m.search(None, "X-GM-RAW", f'"{escaped}"')
     return data[0].split() if typ == "OK" and data and data[0] else []
 
 
 def fetch(m: imaplib.IMAP4_SSL, num: bytes) -> tuple[EmailMessage, str]:
     typ, data = m.fetch(num, "(X-GM-THRID RFC822)")
-    meta = data[0][0].decode(errors="replace")
+    # Gmail can interleave untagged FLAGS updates; take the first (meta, message-bytes) tuple.
+    part = next(p for p in data if isinstance(p, tuple) and len(p) == 2)
+    meta = part[0].decode(errors="replace") if isinstance(part[0], bytes) else str(part[0])
     thrid = re.search(r"X-GM-THRID (\d+)", meta)
-    return email.message_from_bytes(data[0][1], policy=policy.default), thrid.group(1) if thrid else ""
+    return email.message_from_bytes(part[1], policy=policy.default), thrid.group(1) if thrid else ""
 
 
 def plain_text(msg: EmailMessage) -> str:

@@ -57,7 +57,16 @@ def default_dealers(job: Job) -> dict[str, SimDealer]:
             ("price_match", "call"): [Response(7, "call",
                 "Call summary: the internet manager said they could probably do \"about $30,400\" and would email a "
                 "revised total. Fo said it couldn't agree to anything and asked for the number in writing.",
-                P(30400.0, True, available="2026-10-22", hedge_words=("probably", "about")))],
+                P(30400.0, True, available="2026-10-22", hedge_words=("probably", "about")),
+                turns=(
+                    {"role": "assistant", "text": "Hi, I'm Fo, an AI assistant calling on behalf of Arjun about the "
+                     "2026 Honda Civic Sport sedan in Crystal Black Pearl."},
+                    {"role": "user", "text": "Sure, this is the internet manager."},
+                    {"role": "assistant", "text": "The lowest written out-the-door total Arjun has received for the "
+                     "same car is $30,690. If you'd like to revise yours, could you email a revised written total?"},
+                    {"role": "user", "text": "We could probably do about $30,400. I'll email it."},
+                    {"role": "assistant", "text": "Thanks. Please send that by email so Arjun can compare it."},
+                ))],
             ("price_match", "email"): [Response(270, "email",
                 "Revised out-the-door total: $30,450, all tax and fees included, no add-ons. Valid 5 days.",
                 P(30450.0, True, available="2026-10-22"))],
@@ -70,7 +79,16 @@ def default_dealers(job: Job) -> dict[str, SimDealer]:
                 Response(7, "call",
                     "Call summary: spoke with the sales manager. He said \"around $30,500 out the door\" and that he'd "
                     "email the exact total today. No commitments made.",
-                    P(30500.0, True, hedge_words=("around",))),
+                    P(30500.0, True, hedge_words=("around",)),
+                    turns=(
+                        {"role": "assistant", "text": "Hi, I'm Fo, an AI assistant calling on behalf of Arjun about a "
+                         "new 2026 Honda Civic Sport sedan. We emailed your internet sales team for an out-the-door "
+                         "total. Could you reply to that email with the total?"},
+                        {"role": "user", "text": "Around $30,500 out the door. How much is he looking to spend?"},
+                        {"role": "assistant", "text": "The buyer is comparing written out-the-door totals. Could you "
+                         "send yours by email?"},
+                        {"role": "user", "text": "Sure, I'll email it today."},
+                    )),
                 Response(50, "email",
                     "Following up on the call: $30,690 out-the-door, all fees and tax included. Valid through Oct 31.",
                     P(30690.0, True, available="2026-10-25")),

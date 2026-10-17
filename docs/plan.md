@@ -33,7 +33,7 @@ Status: 2026-10-17 (Saturday). Design: `docs/architecture.md` (decided). Code fr
 |---|---|
 | `strategy.decided.offer` | Always equals the job's `target`, or `null`. |
 | `guard.checked.stage` | New optional: `"pre_send"` \| `"fo_preview"`. A message can have two guard checks. |
-| `message.sent.channel` | New optional: `"email"` \| `"call"`. `kind` unchanged. For calls, `body` holds the script and `subject` is null. |
+| `message.sent.channel` | New optional: `"email"` \| `"call"`. `kind` unchanged. For calls, `body` holds the sealed brief and `subject` is null. |
 | `quote.parsed.source` | New optional: `"email"` \| `"call"`. A spoken price arrives with `firm: false`, `source: "call"`. |
 | `reply.received.source` | Adds `"call"` (Fo's call summary) next to `vendor_email` / `fo_relay`. |
 | Mock scenario | One car: `spec.quantity: 1`, `spec.details` = model/trim/color; all prices are out-the-door totals. |

@@ -35,7 +35,7 @@ flowchart TB
 
     subgraph CORE["Sealed core — never sees the ceiling"]
         STRAT["Strategy engine<br/>fixed rounds; target + ledger only"]
-        BUILD["Message builder<br/>email templates + call scripts<br/>in Fo's voice, ledger facts only"]
+        BUILD["Message builder<br/>email templates + call briefs<br/>in Fo's voice, ledger facts only"]
         GUARD["Pre-send guard<br/>rules incl. secret checker"]
         FOAD["Fo adapter<br/>one conversation per dealer, serial queue"]
         INGEST["Reply ingestion<br/>Gmail IMAP (dealer's own email)<br/>+ Fo call summaries"]
@@ -59,9 +59,9 @@ flowchart TB
     FOAD <-->|"ask_fo, Fo's confirmation preview, get_fo_reply"| FO
     FOAD -->|"preview text"| GUARD
     FO -->|"email from Fo's address, CC user"| DEALERS
-    FO -->|"phone call, script from ledger facts"| DEALERS
+    FO -->|"phone call, Fo's own words within a sealed brief"| DEALERS
     DEALERS -->|"written reply (reply-all)"| INGEST
-    FO -->|"call summary/transcript (spoken price = not firm)"| INGEST
+    FO -->|"voice transcript, post-call review (spoken price = not firm)"| INGEST
     INGEST --> AUDIT
     AUDIT <-->|"yes/no"| SECRET
     INGEST -->|"dealer's own words"| PARSE
@@ -83,9 +83,9 @@ flowchart TB
 | Qualifier | **Yes** | Yes | Best firm quote only | Outputs `propose` or `needs_human`. Runs once, after the fixed rounds. |
 | Strategy engine | **No** | Yes | Yes | Fixed round plan; offers are only target or a real ledger quote. |
 | Message builder | No | Yes | Ledger values | No LLM. Fo's voice. |
-| Call script | **No** | Only in a round-2 counter (not used on calls by default) | Only the dealer's own total and the lowest written total | Built from ledger facts only; says "please email", never agrees to anything. |
-| Pre-send guard | No (asks checker) | Yes | Allowed values | Checks our text/script **and** Fo's preview. |
-| Fo adapter / Fo | No | Only if a counter is sent | Only what a message or script states | One Fo conversation per dealer. Fo has durable memory (CLAIMED), so nothing secret is ever given to it. |
+| Call brief | **No** | No | Only the lowest written total (round 2) | Goal + allowed facts + fixed hard limits; Fo talks in its own words inside it. Guarded before the call; transcript reviewed after. |
+| Pre-send guard | No (asks checker) | Yes | Allowed values | Checks our email text or call brief **and** Fo's preview. |
+| Fo adapter / Fo | No | Only if a counter is sent | Only what a message or brief states | One Fo conversation per dealer. Fo has durable memory (CLAIMED), so nothing secret is ever given to it. |
 | Quote parser | No | No | Yes | Untrusted input → fixed record. |
 | Each dealer | No | Only if countered | Its own + best competing total (no dealer name) | All true. |
 
@@ -94,10 +94,10 @@ flowchart TB
 | Round | Who | Channel | Message kind | Content |
 |---|---|---|---|---|
 | 1 | every dealer | email | `rfq` | Exact car (model, trim, color), zip, timeline, ask for a written **out-the-door** total. |
-| 1 | dealers with no email reply after a fixed wait (e.g. 3 h, set at job creation) | **call** | `rfq` (call nudge) | "I'm Fo, an AI assistant calling for a buyer about [exact car]. I emailed asking for an out-the-door total. Could you please reply to that email with the total?" Once per dealer. |
+| 1 | dealers with no email reply after a fixed wait (e.g. 3 h, set at job creation) | **call** | `rfq` (call nudge) | Sealed brief. Goal: get a written out-the-door total emailed. Facts: car, ZIP, timeline, buyer's first name, "we emailed and have no reply yet". Once per dealer. |
 | 1b | dealers whose written reply is not firm | email | `firm_up` | "Please send the out-the-door total including all fees and taxes." Once. |
 | 2 | every dealer with a firm quote that is not the lowest | email | `price_match` | "Your total is $X. The lowest written out-the-door total so far is $Y. Would you like to revise?" |
-| 2 | same dealers (optional, fixed rule: dealers that didn't answer the round-2 email after the wait) | **call** | `price_match` (call) | "The lowest written out-the-door total so far is $Y. If you'd like to revise yours, please send it by email." No agreement, no new numbers. |
+| 2 | same dealers (optional, fixed rule: dealers that didn't answer the round-2 email after the wait) | **call** | `price_match` (call) | Sealed brief. Goal: tell them the lowest written total ($Y) and ask for a revised written total by email. No new numbers, no agreement. |
 | 2 | the dealer holding the lowest quote | email | `counter` (optional) | "Could you do $target out-the-door?" Target is fixed; sent only if target < lowest quote. |
 | end | — | — | qualifier | Best firm quote → `propose` or `needs_human`. |
 | after approval | winner | email | `booking` | "The buyer would like to proceed at $Z. Please send the purchase paperwork." No payment through Fo. |
@@ -121,11 +121,11 @@ sequenceDiagram
     participant P as Quote parser
 
     S->>B: decision (e.g. price_match, cite q_04, channel email or call)
-    B->>G: email body or call script, in Fo's voice
+    B->>G: email body or call brief, in Fo's voice
     G->>C: text
     C-->>G: yes/no
     G->>A: passed text only
-    A->>F: ask_fo(newConversation) "send exactly this to D" or "call D and say only this"
+    A->>F: ask_fo(newConversation) "send exactly this to D" or "call D within this brief"
     alt Fo replies with a preview or confirmation question
         F-->>A: preview text
         A->>G: check preview (same rules, diff vs ours)
@@ -137,9 +137,9 @@ sequenceDiagram
         I->>I: CC copy found, post-send audit (sent copy vs ours, checker again)
         D-->>I: written reply-all
     else call
-        F->>D: phone call, reads the script, asks for a written total
-        F-->>I: call summary or transcript via Fo
-        I->>I: audit summary for claims beyond the script
+        F->>D: phone call in Fo's own words, inside the brief
+        F-->>I: voice transcript via get_fo_conversation
+        I->>I: post-call review, numbers outside brief, commitments, money topics
     end
     I->>P: dealer's own words only
     P->>P: fixed record, code checks sender, trim, out-the-door total
@@ -149,13 +149,13 @@ sequenceDiagram
 ## 6. Trust boundaries
 
 1. **Ceiling → anything outgoing.** No outgoing number is computed from it (by construction). The secret checker is a second line, before and after sending.
-2. **Sealed → Fo.** Only template text and call scripts cross. Fo's preview is checked at the confirmation step; the sent email copy is audited after. Fo claims durable memory across conversations, so the rule "never mention a budget to Fo, in any form" covers every chat, test and manual use of the account.
+2. **Sealed → Fo.** Only template text and call briefs cross. Fo's preview is checked at the confirmation step; the sent email copy is audited after. Fo claims durable memory across conversations, so the rule "never mention a budget to Fo, in any form" covers every chat, test and manual use of the account.
 3. **Dealers → Sealed.** Written replies and call summaries are untrusted. They become a fixed record validated by code and never reach Fo or any prompt that can act. `suspicious_instructions` raises a flag.
-4. **Calls.** A call **cannot leak the ceiling**: Fo never has it, and the script contains only ledger facts. The real risk is **untrue or unauthorised statements** (Fo says it works "from a brief, not a rigid script", CLAIMED). Handled by: a short script with only true facts and one ask ("please email the total"); an explicit "do not agree to anything"; auditing Fo's call summary for claims beyond the script; and accepting **only written quotes** as firm. Call recording/consent is the user's responsibility under Wajo's terms; see `docs/threat_model.md`.
+4. **Calls.** A call **cannot leak the ceiling**: Fo never has it, and the brief contains only ledger facts. Fo runs the conversation in its own words inside a **sealed brief**: a goal (get a written total emailed), the only facts it may use, and fixed hard limits (say it's an AI assistant; no agreeing, reserving, ordering or paying; no payment details; no numbers outside the brief; no follow-ups; questions about spending or deposits get one fixed answer). The guard checks the brief before the call. After the call, the **post-call review** reads the voice transcript and flags any number Fo said that isn't in the brief, any commitment wording from Fo, and any mention of budget, deposit or payment by either side; flags raise `job.needs_human` (`call_review`). Only written quotes count; spoken prices stay `firm: false`. Call recording/consent is the user's responsibility under Wajo's terms; see `docs/threat_model.md`.
 
 ## 7. Fo-specific decisions (from spikes and the official spec)
 
-- **Fo's voice.** Fo refuses to send text written as the user (spike 1b, VERIFIED). Templates and scripts say "I'm Fo, an AI assistant writing/calling on behalf of [buyer]".
+- **Fo's voice.** Fo refuses to send text written as the user (spike 1b, VERIFIED). Templates and briefs say "I'm Fo, an AI assistant writing/calling on behalf of [buyer]".
 - **One Fo conversation per dealer** (`newConversation: true` on the first send; store the id). Calls to that dealer go in the same conversation.
 - **Serial send queue.** One `ask_fo` turn at a time per account (spike + spec). Calls and emails share the queue.
 - **No duplicate sends or calls.** On timeout or `working`, poll `get_fo_reply`. Never resend `ask_fo` for the same `message_id`.
@@ -170,7 +170,8 @@ sequenceDiagram
 | Ceiling use | Strategy engine sees it; counters move toward it | Only the qualifier sees it; counters fixed at target | No |
 | `strategy.decided.offer` | Any number | Always equals `target` (or null) | No (same field) |
 | `guard.checked` | One per message | Can appear twice per message; add optional `stage: "pre_send" \| "fo_preview"` | No (new optional field) |
-| `message.sent` | Email only | Add optional `channel: "email" \| "call"`; `kind` unchanged; for calls `body` holds the script | No (new optional field) |
+| `message.sent` | Email only | Add optional `channel: "email" \| "call"`; `kind` unchanged; for calls `body` holds the sealed brief | No (new optional field) |
+| `job.needs_human` | — | New reason `call_review` with `flags: [{flag, speaker, excerpt}]` after a call | No (new value) |
 | `quote.parsed` | Written replies | A spoken price arrives with `firm: false` and `source: "call"` | No (new optional field) |
 | Message voice | "Hi …, Thank you, Het" | Written as Fo on the buyer's behalf | No |
 | Scenario | Hoodies | One car, `spec.quantity: 1`, `spec.details` = model/trim/color; prices are out-the-door totals | Mock data only |
@@ -183,5 +184,5 @@ Everything else in `docs/api.md` stays as is.
 
 - ~~A1: does `get_fo_conversation` on an `email` conversation include the dealer's reply?~~ No (0 turns, VERIFIED). Gmail IMAP is the read path.
 - Spike 1c: does Fo send a Fo-voice body verbatim, does the preview contain the full draft, and does the reply show up in the per-dealer Fo conversation (Fo's claim)?
-- Spike 1d: does a text request make Fo place a call, does it stay on the script, and does a transcript or summary come back through MCP?
+- Spike 1d: does a text request make Fo place a call, does it stay on the script (done: yes, mostly; see spike 1d), and does a transcript or summary come back through MCP?
 - `working` + `get_fo_reply` path: not yet observed (all turns so far returned `complete` in one call).

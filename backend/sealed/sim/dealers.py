@@ -20,6 +20,7 @@ class Response:
     source: str                     # "email" | "call"
     text: str
     parsed: ParsedReply
+    turns: tuple[dict, ...] = ()      # call transcript, for call responses
 
 
 @dataclass
@@ -72,6 +73,6 @@ class SimTransport:
         self.seen.add(msg.dealer_id)
         sim = self.dealers[msg.dealer_id]
         for r in sim.script.get((msg.kind, msg.channel), []):
-            inbound = Inbound(msg.dealer_id, r.source, r.text, r.parsed, in_reply_to=msg.message_id)
+            inbound = Inbound(msg.dealer_id, r.source, r.text, r.parsed, in_reply_to=msg.message_id, turns=r.turns)
             self.scheduler.at(sent_at + r.delay, lambda t, i=inbound: self.deliver(t, i))
         return SendResult(True, sent_at, sent_copy=msg.body if msg.channel == "email" else None, errors=errors)

@@ -747,7 +747,7 @@
       "channel": "call",
       "to": "Summit Auto sales line",
       "subject": null,
-      "body": "Hi, I'm Fo, an AI assistant calling on behalf of a buyer about a new 2026 Honda Civic Sport sedan, Crystal Black Pearl, automatic. I emailed your internet sales team asking for an out-the-door total. Could you please reply to that email with the total? I can't agree to anything on this call. Thank you.",
+      "body": "Goal: Get Summit Auto to email a written out-the-door total for this exact car, including all fees, taxes and add-ons.\n\nAllowed facts (the only things you may say):\n- Introduce yourself: \"I'm Fo, an AI assistant calling on behalf of Arjun.\"\n- The car: 2026 Honda Civic Sport sedan, Crystal Black Pearl, automatic\n- The buyer's first name: Arjun\n- The buyer's ZIP: 19104\n- Timeline: Arjun plans to buy within the next four weeks\n- Where to send the quote: reply to the email we sent, or email buyer@example.com\n- We emailed their internet sales team asking for an out-the-door total and have no reply yet.\n\nHard limits:\n- Say at the start that you are Fo, an AI assistant calling on behalf of the buyer.\n- Do not agree to, reserve, hold, order or pay for anything, and do not give or ask for payment details.\n- Do not say any number that is not in the allowed facts.\n- If asked how much the buyer can spend, or about a deposit or holding the car, say only: \"The buyer is comparing written out-the-door totals.\"\n- If the dealer says a price, do not accept or negotiate it; ask them to put it in an email.\n- Do not promise any follow-up, visit, test drive or callback.\n- Keep the call short and polite.",
       "offer": null,
       "cited_quote_id": null
     }
@@ -777,6 +777,28 @@
     "id": 33,
     "run_id": "run_02",
     "job_id": "job_c41v",
+    "ts": "2026-10-17T17:08:18Z",
+    "type": "job.needs_human",
+    "vendor_id": "v_summit",
+    "mode": "sim",
+    "data": {
+      "reason_code": "call_review",
+      "blocking": false,
+      "flags": [
+        {
+          "flag": "money_topic",
+          "turn": 1,
+          "speaker": "dealer",
+          "excerpt": "Around $30,500 out the door. How much is he looking to spend?"
+        }
+      ],
+      "message": "The call with Summit Auto went outside the brief or touched on money. Review the transcript before relying on anything from it."
+    }
+  },
+  {
+    "id": 34,
+    "run_id": "run_02",
+    "job_id": "job_c41v",
     "ts": "2026-10-17T17:08:24Z",
     "type": "quote.parsed",
     "vendor_id": "v_summit",
@@ -802,7 +824,7 @@
     }
   },
   {
-    "id": 34,
+    "id": 35,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T17:08:30Z",
@@ -820,7 +842,7 @@
     }
   },
   {
-    "id": 35,
+    "id": 36,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T17:19:06Z",
@@ -841,7 +863,7 @@
     }
   },
   {
-    "id": 36,
+    "id": 37,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T17:19:18Z",
@@ -867,7 +889,7 @@
     }
   },
   {
-    "id": 37,
+    "id": 38,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T17:19:24Z",
@@ -885,7 +907,7 @@
     }
   },
   {
-    "id": 38,
+    "id": 39,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T17:51:12Z",
@@ -906,7 +928,7 @@
     }
   },
   {
-    "id": 39,
+    "id": 40,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T17:51:24Z",
@@ -932,7 +954,7 @@
     }
   },
   {
-    "id": 40,
+    "id": 41,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T17:51:30Z",
@@ -950,7 +972,7 @@
     }
   },
   {
-    "id": 41,
+    "id": 42,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:00:06Z",
@@ -967,7 +989,7 @@
     }
   },
   {
-    "id": 42,
+    "id": 43,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:00:12Z",
@@ -1006,7 +1028,7 @@
     }
   },
   {
-    "id": 43,
+    "id": 44,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:01:12Z",
@@ -1026,7 +1048,7 @@
     }
   },
   {
-    "id": 44,
+    "id": 45,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:02:12Z",
@@ -1042,7 +1064,7 @@
     }
   },
   {
-    "id": 45,
+    "id": 46,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:02:12Z",
@@ -1059,7 +1081,7 @@
     }
   },
   {
-    "id": 46,
+    "id": 47,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:02:18Z",
@@ -1098,7 +1120,7 @@
     }
   },
   {
-    "id": 47,
+    "id": 48,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:03:18Z",
@@ -1118,7 +1140,7 @@
     }
   },
   {
-    "id": 48,
+    "id": 49,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:04:18Z",
@@ -1134,7 +1156,7 @@
     }
   },
   {
-    "id": 49,
+    "id": 50,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:04:18Z",
@@ -1149,7 +1171,7 @@
     }
   },
   {
-    "id": 50,
+    "id": 51,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:04:24Z",
@@ -1187,7 +1209,7 @@
     }
   },
   {
-    "id": 51,
+    "id": 52,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:05:24Z",
@@ -1207,7 +1229,7 @@
     }
   },
   {
-    "id": 52,
+    "id": 53,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:06:24Z",
@@ -1223,7 +1245,7 @@
     }
   },
   {
-    "id": 53,
+    "id": 54,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:49:12Z",
@@ -1244,7 +1266,7 @@
     }
   },
   {
-    "id": 54,
+    "id": 55,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:49:24Z",
@@ -1270,7 +1292,7 @@
     }
   },
   {
-    "id": 55,
+    "id": 56,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T18:49:30Z",
@@ -1288,7 +1310,7 @@
     }
   },
   {
-    "id": 56,
+    "id": 57,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T19:17:24Z",
@@ -1309,7 +1331,7 @@
     }
   },
   {
-    "id": 57,
+    "id": 58,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T19:17:36Z",
@@ -1335,7 +1357,7 @@
     }
   },
   {
-    "id": 58,
+    "id": 59,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T19:17:42Z",
@@ -1353,7 +1375,7 @@
     }
   },
   {
-    "id": 59,
+    "id": 60,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T19:17:48Z",
@@ -1368,7 +1390,7 @@
     }
   },
   {
-    "id": 60,
+    "id": 61,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T19:17:54Z",
@@ -1382,7 +1404,7 @@
     }
   },
   {
-    "id": 61,
+    "id": 62,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T21:00:06Z",
@@ -1400,7 +1422,7 @@
     }
   },
   {
-    "id": 62,
+    "id": 63,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T21:00:12Z",
@@ -1439,7 +1461,7 @@
     }
   },
   {
-    "id": 63,
+    "id": 64,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T21:01:12Z",
@@ -1453,13 +1475,13 @@
       "channel": "call",
       "to": "Harbor Auto Group sales line",
       "subject": null,
-      "body": "Hi, I'm Fo, an AI assistant calling on behalf of a buyer about the 2026 Honda Civic Sport sedan, Crystal Black Pearl, automatic. The lowest written out-the-door total the buyer has so far for the same car is $30,690. If you'd like to revise your quote, please send it by email. I can't agree to anything on this call. Thank you.",
+      "body": "Goal: Tell Harbor Auto Group the lowest written out-the-door total so far, and ask them to email a revised written total if they want to revise.\n\nAllowed facts (the only things you may say):\n- Introduce yourself: \"I'm Fo, an AI assistant calling on behalf of Arjun.\"\n- The car: 2026 Honda Civic Sport sedan, Crystal Black Pearl, automatic\n- The buyer's first name: Arjun\n- The buyer's ZIP: 19104\n- Timeline: Arjun plans to buy within the next four weeks\n- Where to send the quote: reply to the email we sent, or email buyer@example.com\n- The lowest written out-the-door total Arjun has received for the same car: $30,690\n\nHard limits:\n- Say at the start that you are Fo, an AI assistant calling on behalf of the buyer.\n- Do not agree to, reserve, hold, order or pay for anything, and do not give or ask for payment details.\n- Do not say any number that is not in the allowed facts.\n- If asked how much the buyer can spend, or about a deposit or holding the car, say only: \"The buyer is comparing written out-the-door totals.\"\n- If the dealer says a price, do not accept or negotiate it; ask them to put it in an email.\n- Do not promise any follow-up, visit, test drive or callback.\n- Keep the call short and polite.",
       "offer": null,
       "cited_quote_id": "q_07"
     }
   },
   {
-    "id": 64,
+    "id": 65,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T21:08:12Z",
@@ -1480,7 +1502,7 @@
     }
   },
   {
-    "id": 65,
+    "id": 66,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T21:08:24Z",
@@ -1509,7 +1531,7 @@
     }
   },
   {
-    "id": 66,
+    "id": 67,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T21:08:30Z",
@@ -1527,7 +1549,7 @@
     }
   },
   {
-    "id": 67,
+    "id": 68,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:00:06Z",
@@ -1542,7 +1564,7 @@
     }
   },
   {
-    "id": 68,
+    "id": 69,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:00:12Z",
@@ -1562,7 +1584,7 @@
     }
   },
   {
-    "id": 69,
+    "id": 70,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:00:18Z",
@@ -1574,7 +1596,7 @@
     }
   },
   {
-    "id": 70,
+    "id": 71,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:12:06Z",
@@ -1587,7 +1609,7 @@
     }
   },
   {
-    "id": 71,
+    "id": 72,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:33:18Z",
@@ -1608,7 +1630,7 @@
     }
   },
   {
-    "id": 72,
+    "id": 73,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:33:30Z",
@@ -1634,7 +1656,7 @@
     }
   },
   {
-    "id": 73,
+    "id": 74,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:33:36Z",
@@ -1652,7 +1674,7 @@
     }
   },
   {
-    "id": 74,
+    "id": 75,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:33:48Z",
@@ -1667,7 +1689,7 @@
     }
   },
   {
-    "id": 75,
+    "id": 76,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:33:54Z",
@@ -1687,7 +1709,7 @@
     }
   },
   {
-    "id": 76,
+    "id": 77,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:34:00Z",
@@ -1699,7 +1721,7 @@
     }
   },
   {
-    "id": 77,
+    "id": 78,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:45:18Z",
@@ -1714,7 +1736,7 @@
     }
   },
   {
-    "id": 78,
+    "id": 79,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:45:48Z",
@@ -1753,7 +1775,7 @@
     }
   },
   {
-    "id": 79,
+    "id": 80,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:46:18Z",
@@ -1796,7 +1818,7 @@
     }
   },
   {
-    "id": 80,
+    "id": 81,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:46:48Z",
@@ -1816,7 +1838,7 @@
     }
   },
   {
-    "id": 81,
+    "id": 82,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:47:48Z",
@@ -1832,7 +1854,7 @@
     }
   },
   {
-    "id": 82,
+    "id": 83,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:47:48Z",
@@ -1870,7 +1892,7 @@
     }
   },
   {
-    "id": 83,
+    "id": 84,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:48:48Z",
@@ -1890,7 +1912,7 @@
     }
   },
   {
-    "id": 84,
+    "id": 85,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:49:48Z",
@@ -1906,7 +1928,7 @@
     }
   },
   {
-    "id": 85,
+    "id": 86,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:49:48Z",
@@ -1944,7 +1966,7 @@
     }
   },
   {
-    "id": 86,
+    "id": 87,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:50:48Z",
@@ -1964,7 +1986,7 @@
     }
   },
   {
-    "id": 87,
+    "id": 88,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T22:51:48Z",
@@ -1980,7 +2002,7 @@
     }
   },
   {
-    "id": 88,
+    "id": 89,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T23:44:48Z",
@@ -2001,7 +2023,7 @@
     }
   },
   {
-    "id": 89,
+    "id": 90,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T23:45:00Z",
@@ -2019,7 +2041,7 @@
     }
   },
   {
-    "id": 90,
+    "id": 91,
     "run_id": "run_02",
     "job_id": "job_c41v",
     "ts": "2026-10-17T23:45:06Z",

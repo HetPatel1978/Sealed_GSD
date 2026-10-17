@@ -130,3 +130,41 @@ Two `ask_fo` calls in new conversations at the same instant over one MCP session
 ## Spike 1d: outbound call (PREPARED, NOT RUN)
 
 `spikes/fo_call_test.py`: dry run by default; `--yes-call` only after Het approves; number from `SEALED_TEST_PHONE` (local `.env`, never committed; masked in logs). Measures confirmation, whether the call happens, script adherence (from Fo's summary), new `voice` conversation + transcript, end-to-end time.
+
+## Spike 1c: Fo-voice email, RUN (2026-10-17, 20:46 UTC, tag `SEALED-12152C09`)
+
+Recipient rfb5381@psu.edu only. Body in Fo's voice, no digits, no prices (guard passed before sending).
+
+| Question | Result | Label |
+|---|---|---|
+| Did Fo send it? | Yes. `ask_fo` → `complete` in 40.4 s: "Sent. It went from your Gmail to rfb5381@psu.edu with the exact subject and body, and you're on CC." | VERIFIED |
+| Confirmation preview? | **None.** No question, no draft shown; Fo sent directly (we had explicitly asked it to send). The `fo_preview` guard stage did not trigger. | VERIFIED |
+| `working` / `get_fo_reply` path? | Not triggered (5th time a turn completed in one call). | VERIFIED |
+| Subject tag kept? | **Yes**, subject exact. | VERIFIED (Gmail) |
+| Body verbatim? | **Yes**, identical after line-ending normalisation; empty diff. | VERIFIED (Gmail) |
+| From address | **`Het Patel <hetp2030@gmail.com>`**, not `fo@wajo.ai` (Oct 15 used fo@wajo.ai). To: rfb5381@psu.edu, Cc: hetp2030@gmail.com. Fo used the user's connected Gmail. | VERIFIED |
+| Threading | Sent copy has a normal Gmail Message-ID; Oct 15 reply showed `In-Reply-To` = Fo's message id, so header threading works. | VERIFIED |
+
+**Consequences**
+- Because mail goes out from the user's own Gmail, **every dealer reply lands in the user's inbox**, reply-all or not. Gmail IMAP is a complete read path for written replies.
+- With no preview turn, the only checks on what Fo actually sent are the pre-send guard (our text) and the **post-send audit of the copy in Gmail**. The audit should move off the cut list.
+- The dealer sees the user's address in From while the body says "I'm Fo, an AI assistant…". Honest (disclosed) but mixed; decide whether to ask Fo to send from its own address.
+
+## Spike 1d: outbound call, RUN (2026-10-17, 20:48 UTC)
+
+Call to Het's own phone (number from `SEALED_TEST_PHONE`, never logged in the repo).
+
+| Question | Result | Label |
+|---|---|---|
+| Confirmation first? | **No.** `ask_fo` → `complete` in 42.8 s: "Call's dispatched to your phone now, and I've set myself a check at 4:58 PM to make sure the transcript summary reaches you one way or another". | VERIFIED |
+| Did the call happen? | Yes: a new `voice` conversation appeared ~10 s after the request. | VERIFIED |
+| Script adherence | Transcript turns: Fo "Hey Het! What's up?" → Fo "…of a buyer about one specific car. Could you please email the out-the-door total for that car to my email address? Thank you, goodbye." → callee "Thank you". **Fo added a greeting by name** that was not in the script (it recognised the account owner's number). The start of the script is missing from the transcript. | VERIFIED (transcript) / what was said live: per Het |
+| Transcript via MCP? | **Yes**: `get_fo_conversation` on the `voice` conversation returns turns (`assistant` = Fo, `user` = callee) with timestamps. Partial (beginning of the script missing). | VERIFIED |
+| Where the call lives | A **separate** `voice` conversation, not inside the chat conversation that requested it. Its internal title is `voice-out:<dialed number>` (shown as "Untitled" in the list) → the adapter can match a call to a dealer by phone number. | VERIFIED |
+| Unrequested actions | Fo **scheduled its own follow-up check** ("at 4:58 PM") to report the transcript. | VERIFIED (Fo's words) |
+| End to end | 46.9 s from request to `complete`; call itself ~30 s. | VERIFIED |
+
+**Consequences**
+- Calls work from a text request with no confirmation, so the pre-send guard on the call script is the only gate before Fo dials. Keep calls behind the serial queue and Het's approval for real dealers.
+- Fo improvises at least the opening line. On dealer calls the script must stay short, and call summaries/transcripts are audited for claims beyond the script.
+- The voice conversation title contains the dialed phone number: mask it in every log.

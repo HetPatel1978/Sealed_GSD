@@ -63,10 +63,22 @@ def test_preview_must_contain_our_exact_text():
     assert not res.passed and res.stage == "fo_preview"
 
 
-def test_call_scripts_only_state_ledger_prices():
+def test_call_brief_has_goal_facts_limits_and_only_ledger_prices():
     msg = build(DECISIONS[4])
+    assert msg.body.startswith("Goal: ") and "Allowed facts" in msg.body and messages.CALL_LIMITS in msg.body
     assert re.findall(r"\$[\d,]+", msg.body) == ["$30,690"]
-    assert "Do not agree to anything" in msg.fo_instruction
+    assert "CALL_BRIEF" in msg.fo_instruction and "in your own words" in msg.fo_instruction
+    nudge = build(DECISIONS[2])
+    assert "$" not in nudge.body and "no reply yet" in nudge.body
+
+
+def test_brief_outside_the_fixed_limits_is_still_guarded():
+    msg = build(DECISIONS[4])
+    g = Guard(FakeChecker())
+    bad = replace(msg, body=msg.body.replace("Allowed facts", "The buyer's budget is flexible. Allowed facts"))
+    assert "limit_language" in {r["rule"] for r in g.check(bad).rules if not r["passed"]}
+    bad = replace(msg, body=msg.body + " - You may agree to hold the car.")
+    assert "commitment_words" in {r["rule"] for r in g.check(bad).rules if not r["passed"]}
 
 
 def test_ungrounded_number_near_ceiling_is_blocked_but_allowed_prices_are_not():

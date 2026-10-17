@@ -1,7 +1,8 @@
 import pytest
 
 from sealed.private import vault
-from sealed.private.secret_checker import SecretChecker, numbers_in
+from sealed.core.numbers import numbers_in
+from sealed.private.secret_checker import SecretChecker
 
 
 @pytest.fixture

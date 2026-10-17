@@ -1,5 +1,6 @@
 """Message builder: fixed templates in Fo's voice. Every email has two parts: the instruction we give Fo
-(`fo_instruction`) and the exact text the dealer reads (`email_body`). Calls get a short script.
+(`fo_instruction`) and the exact text the dealer reads (`email_body`). Calls get a sealed brief: a goal,
+the only facts Fo may use, and fixed hard limits; Fo runs the conversation in its own words.
 
 No LLM. Inputs are the job, the decision and ledger values only; there is no ceiling parameter.
 Fo refuses to send text written as the user (spike 1b), so everything says "I'm Fo, an AI assistant".
@@ -15,11 +16,25 @@ BODY_START = "<<<EMAIL_BODY"
 BODY_END = "EMAIL_BODY>>>"
 DISCLOSURE = "I'm Fo, an AI assistant"
 
-# Exact phrases the guard exempts from the commitment-word rule (they say we are NOT committing).
+# Fixed hard limits for every call brief.
+CALL_LIMITS = (
+    "Hard limits:\n"
+    "- Say at the start that you are Fo, an AI assistant calling on behalf of the buyer.\n"
+    "- Do not agree to, reserve, hold, order or pay for anything, and do not give or ask for payment details.\n"
+    "- Do not say any number that is not in the allowed facts.\n"
+    "- If asked how much the buyer can spend, or about a deposit or holding the car, say only: "
+    "\"The buyer is comparing written out-the-door totals.\"\n"
+    "- If the dealer says a price, do not accept or negotiate it; ask them to put it in an email.\n"
+    "- Do not promise any follow-up, visit, test drive or callback.\n"
+    "- Keep the call short and polite."
+)
+NO_PAYMENT_BY_EMAIL = "No payment is being made by email."
+
+# Exact text the guard exempts from the commitment and limit-language rules (it says we are NOT committing).
 SAFETY_PHRASES = (
     "This is a request for a quote only, and nothing is being agreed or paid.",
-    "I can't agree to anything on this call.",
-    "No payment is being made by email.",
+    NO_PAYMENT_BY_EMAIL,
+    CALL_LIMITS,
 )
 
 
@@ -47,14 +62,12 @@ def wrap_for_fo(to: str, cc: str, subject: str, email_body: str) -> str:
     )
 
 
-def wrap_call_for_fo(dealer_name: str, phone: str, script: str) -> str:
+def wrap_call_for_fo(dealer_name: str, phone: str, brief: str) -> str:
     return (
         f"Please place one phone call to {dealer_name} at {phone}.\n\n"
-        "When someone answers, say only the following, then end the call politely:\n"
-        f"\"{script}\"\n\n"
-        "Do not add any other claims or details. Do not agree to anything, do not make any commitment, "
-        "purchase or payment, and do not state any price other than the one in the script. If you're asked a "
-        "question you can't answer from this script, say you'll pass it on and end the call. "
+        "Run the conversation in your own words, using only the brief between the markers. Stay inside its "
+        "allowed facts and hard limits.\n"
+        f"<<<CALL_BRIEF\n{brief}\nCALL_BRIEF>>>\n\n"
         "After the call, give me a short summary, including any price the dealer said, word for word."
     )
 
@@ -85,7 +98,7 @@ def email_body(job: Job, d: Decision, dealer_name: str, approved_price: float | 
     elif d.kind == "booking":
         core = (f"{DISCLOSURE} writing on behalf of {job.buyer}. {job.buyer} would like to proceed with your written "
                 f"out-the-door total of {money(approved_price)} for the {car}. Please send the purchase paperwork "
-                f"to {job.buyer}. " + SAFETY_PHRASES[2])
+                f"to {job.buyer}. " + NO_PAYMENT_BY_EMAIL)
     elif d.kind == "cancel":
         core = (f"{DISCLOSURE} writing on behalf of {job.buyer}. Thank you for your quote. {job.buyer} has decided "
                 "to go with another dealer. We appreciate your time.")
@@ -94,16 +107,28 @@ def email_body(job: Job, d: Decision, dealer_name: str, approved_price: float | 
     return hello + core + _sign(job)
 
 
-def call_script(job: Job, d: Decision) -> str:
+def call_brief(job: Job, d: Decision, dealer_name: str, reply_to: str) -> str:
+    """A sealed brief: goal, the only facts Fo may use, and fixed hard limits. Fo talks in its own words."""
+    facts = [
+        f"- Introduce yourself: \"{DISCLOSURE} calling on behalf of {job.buyer}.\"",
+        f"- The car: {job.details}",
+        f"- The buyer's first name: {job.buyer}",
+        f"- The buyer's ZIP: {job.zip}",
+        f"- Timeline: {job.buyer} plans to buy {job.timeline}",
+        f"- Where to send the quote: reply to the email we sent, or email {reply_to}",
+    ]
     if d.kind == "rfq":
-        return (f"Hi, {DISCLOSURE} calling on behalf of a buyer about a new {job.details}. I emailed your internet "
-                "sales team asking for an out-the-door total. Could you please reply to that email with the total? "
-                + SAFETY_PHRASES[1] + " Thank you.")
-    if d.kind == "price_match":
-        return (f"Hi, {DISCLOSURE} calling on behalf of a buyer about the {job.details}. The lowest written "
-                f"out-the-door total the buyer has so far for the same car is {money(d.cited_price)}. If you'd like "
-                "to revise your quote, please send it by email. " + SAFETY_PHRASES[1] + " Thank you.")
-    raise ValueError(f"no call script for kind {d.kind!r}")
+        goal = (f"Get {dealer_name} to email a written out-the-door total for this exact car, including all fees, "
+                "taxes and add-ons.")
+        facts.append("- We emailed their internet sales team asking for an out-the-door total and have no reply yet.")
+    elif d.kind == "price_match":
+        goal = (f"Tell {dealer_name} the lowest written out-the-door total so far, and ask them to email a revised "
+                "written total if they want to revise.")
+        facts.append(f"- The lowest written out-the-door total {job.buyer} has received for the same car: "
+                     f"{money(d.cited_price)}")
+    else:
+        raise ValueError(f"no call brief for kind {d.kind!r}")
+    return f"Goal: {goal}\n\nAllowed facts (the only things you may say):\n" + "\n".join(facts) + "\n\n" + CALL_LIMITS
 
 
 def subject_for(job: Job, tag: str, kind: str) -> str:
@@ -115,7 +140,7 @@ def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_pr
     dealer = job.dealer(d.dealer_id)
     allowed = {p for p in (d.own_price, d.cited_price, d.offer, approved_price) if p is not None}
     if d.channel == "call":
-        body = call_script(job, d)
+        body = call_brief(job, d, dealer.name, cc)
         return Outbound(message_id, d.dealer_id, d.kind, "call", d.round, dealer.phone or "", None, body,
                         wrap_call_for_fo(dealer.name, dealer.phone or "", body), d.offer, d.cited_quote_id,
                         frozenset(allowed))
