@@ -1,0 +1,38 @@
+{
+  "zip": "16801",
+  "radius_miles": 20,
+  "mode": "sim",
+  "dealers": [
+    {
+      "name": "Valley Honda",
+      "email": "sales@valleyhonda.example",
+      "phone": "+1-814-555-0101",
+      "website": "https://valleyhonda.example",
+      "address": "123 College Ave, State College, PA 16801",
+      "distance_miles": 1.8,
+      "in_stock": true,
+      "source": { "kind": "discovery", "urls": ["https://valleyhonda.example/contact", "https://valleyhonda.example/new/civic"] }
+    },
+    {
+      "name": "Nittany Honda",
+      "email": null,
+      "phone": "+1-814-555-0144",
+      "website": "https://nittanyhonda.example",
+      "address": "2400 Benner Pike, Bellefonte, PA 16823",
+      "distance_miles": 9.6,
+      "in_stock": null,
+      "source": { "kind": "discovery", "urls": ["https://nittanyhonda.example/about"] }
+    },
+    {
+      "name": "Bald Eagle Honda",
+      "email": "internetsales@baldeaglehonda.example",
+      "phone": "+1-814-555-0172",
+      "website": "https://baldeaglehonda.example",
+      "address": "88 Main St, Milesburg, PA 16853",
+      "distance_miles": 13.4,
+      "in_stock": false,
+      "source": { "kind": "discovery", "urls": ["https://baldeaglehonda.example/contact-us"] }
+    }
+  ],
+  "dropped": 2
+}

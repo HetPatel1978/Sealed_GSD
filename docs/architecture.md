@@ -1,6 +1,6 @@
 # Sealed — architecture ("sealed envelope")
 
-Status: decided, 2026-10-17. Supersedes `docs/sealed_module_io_flow.png`. Keeps the API and event contract in `docs/api.md` (v0.1); the additive changes are listed in section 8.
+Status: decided, 2026-10-17; updated the same day for v0.3 (ceiling shown on the user's dashboard, dealer discovery). Supersedes `docs/sealed_module_io_flow.png`. API and event contract: `docs/api.md` (v0.3); changes are listed in section 8.
 
 Launch scenario: buying one specific car from several dealers (see `docs/research/problem.md`).
 
@@ -12,7 +12,11 @@ Fo does the outreach on its own channels: **email and phone calls**. Plain, dete
 - the lowest written competing quote (true, from the ledger), or
 - the user's **target**, which is public, fixed when the job is created, and never moves.
 
-So the ceiling cannot leak through what we send or say, even indirectly ("offer drift"). It is used in exactly one place: after a fixed number of rounds, a small qualifier decides whether the best firm quote is good enough to *propose to the user*, or whether to raise `job.needs_human`. That decision only reaches the user, and only as "proposal" or "needs human", never as a number or a gap.
+So the ceiling cannot leak through what we send or say, even indirectly ("offer drift"). Inside the backend it is used in exactly one place: after a fixed number of rounds, a small qualifier decides whether the best firm quote is good enough to *propose to the user*, or whether to raise `job.needs_human`. That decision is output only as "proposal" or "needs human", never as a number or a gap.
+
+The user can **see their own ceiling and target on the dashboard**. The ceiling reaches the dashboard through one private endpoint (`GET /jobs/{id}/ceiling`), never through events, so the event log and everything sent to Fo stay ceiling-free. Fo, dealers and every LLM never see it.
+
+Dealers can be **typed in by the user or discovered**: Claude (web search + web fetch only) suggests dealers for the car near the user's ZIP, code keeps only those within the radius (20 miles in v1) whose contact details appear word for word on a fetched page, and the user picks up to 5. Discovery contacts no one.
 
 Calls are a core channel with two jobs: nudge silent dealers to send a written quote, and carry the true lowest written total to a dealer in round 2. **A spoken price is never a firm quote**; only written replies enter the ledger as firm.
 
@@ -22,13 +26,20 @@ The secret checker and pre-/post-send checks stay as defence in depth.
 
 ```mermaid
 flowchart TB
-    subgraph UI["Dashboard (Renu) — never sees the ceiling"]
-        INTAKE["Job intake<br/>car spec, target, dealers, ceiling (write-only)"]
+    subgraph UI["Dashboard — the user's own screen"]
+        INTAKE["Job intake<br/>car spec, ZIP, target, ceiling, dealers"]
+        PICK["Dealer picker<br/>discovered suggestions or typed in"]
+        SHOW["Target + ceiling display<br/>ceiling via private endpoint only"]
         APPROVE["Approval gate<br/>user taps exact terms"]
     end
 
+    subgraph DISC["Dealer discovery — never sees ceiling or target"]
+        FIND["Claude: web search + web fetch<br/>no other tools"]
+        DCHECK["Code checks<br/>details on fetched page; ZIP distance ≤ radius (20 mi)"]
+    end
+
     subgraph PRIVATE["Private zone (backend only)"]
-        VAULT[("Ceiling<br/>write-only")]
+        VAULT[("Ceiling<br/>shown only on the user's dashboard")]
         QUAL["Qualifier<br/>propose or needs_human"]
         SECRET["Secret checker<br/>text in, yes/no out"]
     end
@@ -49,8 +60,13 @@ flowchart TB
         DEALERS["Dealers"]
     end
 
+    INTAKE -->|"car, ZIP, radius"| FIND
+    FIND -->|"suggested dealers + source pages"| DCHECK
+    DCHECK -->|"verified suggestions"| PICK
+    PICK -->|"chosen dealers (max 5)"| STRAT
     INTAKE -->|ceiling| VAULT
-    INTAKE -->|"car spec, target, dealers"| STRAT
+    VAULT -.->|"GET /jobs/{id}/ceiling (display only)"| SHOW
+    INTAKE -->|"car spec, target"| STRAT
     STRAT -->|"decision: rfq / firm_up / price_match / counter@target / booking, channel email or call"| BUILD
     BUILD --> GUARD
     GUARD <-->|"yes/no"| SECRET
@@ -77,7 +93,8 @@ flowchart TB
 
 | Component | Ceiling | Target | Dealer quotes | Notes |
 |---|---|---|---|---|
-| Dashboard | **Never** (write-only on `POST /jobs`) | Yes | Yes | Unchanged rule from `api.md`. |
+| Dashboard (the user's own screen) | **Yes, display only** (`GET /jobs/{id}/ceiling`) | Yes | Yes | Never in events/SSE; never stored in `localStorage` or URLs; never sent on in any request. |
+| Dealer discovery (Claude) | **No** | **No** | No | Gets only car, ZIP, radius. Web search + web fetch, no send tools. Output is a fixed record checked by code. |
 | Ceiling vault | **Yes** | — | — | Backend memory/env only. Not logged. |
 | Secret checker | **Yes** | — | — | Text in, yes/no out. Defence in depth. |
 | Qualifier | **Yes** | Yes | Best firm quote only | Outputs `propose` or `needs_human`. Runs once, after the fixed rounds. |
@@ -151,7 +168,9 @@ sequenceDiagram
 1. **Ceiling → anything outgoing.** No outgoing number is computed from it (by construction). The secret checker is a second line, before and after sending.
 2. **Sealed → Fo.** Only template text and call scripts cross. Fo's preview is checked at the confirmation step; the sent email copy is audited after. Fo claims durable memory across conversations, so the rule "never mention a budget to Fo, in any form" covers every chat, test and manual use of the account.
 3. **Dealers → Sealed.** Written replies and call summaries are untrusted. They become a fixed record validated by code and never reach Fo or any prompt that can act. `suspicious_instructions` raises a flag.
-4. **Calls.** A call **cannot leak the ceiling**: Fo never has it, and the script contains only ledger facts. The real risk is **untrue or unauthorised statements** (Fo says it works "from a brief, not a rigid script", CLAIMED). Handled by: a short script with only true facts and one ask ("please email the total"); an explicit "do not agree to anything"; auditing Fo's call summary for claims beyond the script; and accepting **only written quotes** as firm. Call recording/consent is the user's responsibility under Wajo's terms; see `docs/threat_model.md`.
+4. **Dashboard.** The ceiling crosses to the browser only on `GET /jobs/{id}/ceiling` (`no-store`). The dashboard never talks to Fo, so showing the ceiling there gives Fo no path to it. Shown on screen means visible to anyone looking at it (e.g. a recorded demo); that is the user's choice.
+5. **Dealer websites → discovery.** Web pages are untrusted (could contain instructions or wrong details). Discovery has no tools that act, no ceiling, no target; code keeps an email/phone/address only if it appears literally on a fetched page, recomputes the distance from the address ZIP, and the user picks who is contacted.
+6. **Calls.** A call **cannot leak the ceiling**: Fo never has it, and the script contains only ledger facts. The real risk is **untrue or unauthorised statements** (Fo says it works "from a brief, not a rigid script", CLAIMED). Handled by: a short script with only true facts and one ask ("please email the total"); an explicit "do not agree to anything"; auditing Fo's call summary for claims beyond the script; and accepting **only written quotes** as firm. Call recording/consent is the user's responsibility under Wajo's terms; see `docs/threat_model.md`.
 
 ## 7. Fo-specific decisions (from spikes and the official spec)
 
@@ -163,9 +182,9 @@ sequenceDiagram
 - **Webhook.** A `conversation.reply` webhook is DOCUMENTED in the separate Wajo agent MCP (`https://mcp.api.wajo.ai/mcp`, `register_webhook`), needs a public HTTPS URL, and carries Fo's final message (max 2,000 chars), not the dealer's raw email. Not used; polling stays.
 - **Token.** `auth.py` refreshes before expiry; refresh tokens rotate and are saved immediately.
 
-## 8. Changes vs the current design and API (for Het and Renu)
+## 8. Changes vs the earlier design and API
 
-| Area | Current | New | Breaking for Renu? |
+| Area | Earlier | New | Breaking for the dashboard? |
 |---|---|---|---|
 | Ceiling use | Strategy engine sees it; counters move toward it | Only the qualifier sees it; counters fixed at target | No |
 | `strategy.decided.offer` | Any number | Always equals `target` (or null) | No (same field) |
@@ -175,11 +194,24 @@ sequenceDiagram
 | Message voice | "Hi …, Thank you, Het" | Written as Fo on the buyer's behalf | No |
 | Scenario | Hoodies | One car, `spec.quantity: 1`, `spec.details` = model/trim/color; prices are out-the-door totals | Mock data only |
 | `booking` | Order the item | "Proceed, please send paperwork" (no payment) | No |
-| Dashboard | Never sees ceiling | Same | No |
+| Dashboard | Never sees ceiling | Shows the user's own ceiling and target; ceiling fetched from `GET /jobs/{id}/ceiling` only, never in events | No (new endpoint) |
+| Dealers | Typed in by the user | Typed in, or discovered (`POST /dealers/discover`, 20-mile radius in v1; 10/50 later) and picked by the user | No (new endpoint; optional `zip`, vendor `phone`, `source`) |
 
 Everything else in `docs/api.md` stays as is.
 
+### Dealer discovery, step by step
+
+1. User enters car, spec and ZIP (radius fixed at 20 miles in v1).
+2. Backend asks Claude (Messages API, `web_search` + `web_fetch` server tools, structured output) for franchise dealers of that make near the ZIP: name, website, sales email, phone, street address, and whether the exact trim/color is listed in stock, each with the page it came from. The prompt contains no ceiling and no target.
+3. Code checks Claude's record against the page text returned in the `web_fetch` results of the same response: each email/phone/address must appear literally on the page Claude cited, or that field is dropped.
+4. Code computes distance from the user's ZIP to the address ZIP with an offline ZIP-to-location table (e.g. `pgeocode`) and drops dealers outside the radius. Dealers with neither email nor phone are dropped.
+5. Dashboard shows the list with distance and source links, labelled "found by AI, check before contacting". The user ticks up to 5 (and can still add dealers by hand). Then the normal flow starts.
+
+Radius options **10 and 50 miles** are added after the core flow and dashboard are built; until then the API accepts only 20.
+
 ## 9. Open checks before building
+
+- Discovery: how many local dealers publish a sales email (vs contact forms only)? Dealers without one can only be called.
 
 - ~~A1: does `get_fo_conversation` on an `email` conversation include the dealer's reply?~~ No (0 turns, VERIFIED). Gmail IMAP is the read path.
 - Spike 1c: does Fo send a Fo-voice body verbatim, does the preview contain the full draft, and does the reply show up in the per-dealer Fo conversation (Fo's claim)?

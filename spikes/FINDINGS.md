@@ -125,8 +125,8 @@ Two `ask_fo` calls in new conversations at the same instant over one MCP session
 
 ## Spike 1c: Fo-voice email (PREPARED, NOT RUN)
 
-`spikes/fo_send_voice_test.py`: dry run by default; `--yes-send` only after Het approves; recipient rfb5381@psu.edu only. Measures preview content (full body/subject/recipient) and answers "yes" only if it all matches; `working`/`get_fo_reply` path; `--tag T --watch 15` watches the per-dealer Fo conversation and new conversations for the reply (tests Fo's "arrives back in this thread" claim). Verbatim/tag on the sent copy: `spikes/gmail_read.py --tag T` (needs `.env`).
+`spikes/fo_send_voice_test.py`: dry run by default; `--yes-send` only after a team member approves; recipient rfb5381@psu.edu only. Measures preview content (full body/subject/recipient) and answers "yes" only if it all matches; `working`/`get_fo_reply` path; `--tag T --watch 15` watches the per-dealer Fo conversation and new conversations for the reply (tests Fo's "arrives back in this thread" claim). Verbatim/tag on the sent copy: `spikes/gmail_read.py --tag T` (needs `.env`).
 
 ## Spike 1d: outbound call (PREPARED, NOT RUN)
 
-`spikes/fo_call_test.py`: dry run by default; `--yes-call` only after Het approves; number from `SEALED_TEST_PHONE` (local `.env`, never committed; masked in logs). Measures confirmation, whether the call happens, script adherence (from Fo's summary), new `voice` conversation + transcript, end-to-end time.
+`spikes/fo_call_test.py`: dry run by default; `--yes-call` only after a team member approves; number from `SEALED_TEST_PHONE` (local `.env`, never committed; masked in logs). Measures confirmation, whether the call happens, script adherence (from Fo's summary), new `voice` conversation + transcript, end-to-end time.

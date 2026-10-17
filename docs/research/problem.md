@@ -102,7 +102,7 @@ Only honest if the purchase intent is real. Before any send:
 
 - **Real buyer.** Someone on the team (or a friend who agrees) is genuinely shopping for this exact car. If nobody is, use Option B. Asking dealers for quotes with no intent to buy would break Sealed's own "true facts only" rule.
 - **Every message must be true.** State only the real timeline ("planning to buy within N weeks" only if true). Never "ready to buy today" unless it is.
-- **Het approves each send** (project rule), and Fo will also ask for confirmation before emailing anyone (DOCUMENTED in the Fo spec).
+- **The user or a team member approves each send** (project rule), and Fo will also ask for confirmation before emailing anyone (DOCUMENTED in the Fo spec).
 - **No ceiling, ever**, in any message, to Fo or to dealers.
 - **Pick dealers that work weekends.** PA dealers are closed Sunday (DOCUMENTED). Choose dealers in a state without a Sunday ban (ASSUMED: check each dealer's hours), and send **today (Saturday)** so replies can come Saturday evening or Sunday.
 - **Decline unused dealers politely** at the end, even in a demo.

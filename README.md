@@ -1,6 +1,6 @@
 # Sealed
 
-Sealed is a negotiation agent built on Wajo's Fo. You describe a job (what, how many, by when), set a target price and a secret ceiling, and list a few sellers. Fo emails each seller from your Wajo account, Sealed reads their replies from your inbox, counters using only true facts (real written quotes, never invented leverage), and asks you to approve the winning deal before anything is booked. The ceiling never leaves Sealed's private core: it is never sent to Fo, to any seller, to any LLM, or to the frontend, and every outgoing message is checked before and after it is sent.
+Sealed is a negotiation agent built on Wajo's Fo. You describe a job (what, how many, by when), set a target price and a secret ceiling, and either list a few sellers or let Sealed find dealers within 20 miles of your ZIP and pick from its suggestions. Fo emails each seller from your Wajo account, Sealed reads their replies from your inbox, counters using only true facts (real written quotes, never invented leverage), and asks you to approve the winning deal before anything is booked. The ceiling is never sent to Fo, to any seller, or to any LLM, and every outgoing message is checked before and after it is sent. You can see your own target and ceiling on the dashboard; the ceiling reaches it through one private endpoint and never appears in the event stream.
 
 ## Design
 
@@ -11,10 +11,11 @@ Sealed is a negotiation agent built on Wajo's Fo. You describe a job (what, how 
 ## Layout
 
 ```
-backend/   FastAPI app (Het)
-frontend/  Renu's dashboard, design is hers
+backend/   FastAPI app
+frontend/  dashboard
 docs/      architecture.md (current design), api.md, plan.md, decisions.md, threat_model.md, research/
-mock/      events.json: one full simulated run as an event stream; check_mock.py validates it
+mock/      events.json: one full simulated run as an event stream; check_mock.py validates it;
+           ceiling.json + discovery.json: sample responses for the ceiling and discovery endpoints
 spikes/    throwaway experiments, not product code
 ```
 
@@ -36,7 +37,7 @@ Credentials (Fo OAuth token, Gmail app password, Anthropic key) load from enviro
 
 ## Frontend
 
-`frontend/` is Renu's. Build against `docs/api.md` and replay `mock/events.json` until the backend streams real events.
+Build against `docs/api.md`. Until the backend streams real events, replay `mock/events.json` and use `mock/ceiling.json` and `mock/discovery.json` as the responses of `GET /jobs/{id}/ceiling` and `POST /dealers/discover`.
 
 ## Mock data
 

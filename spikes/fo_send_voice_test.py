@@ -1,7 +1,7 @@
 """Spike 1c: rerun the spike 1b email with a body written in Fo's own voice. Recipient: rfb5381@psu.edu only.
 
     backend/.venv/Scripts/python -u spikes/fo_send_voice_test.py              # dry run: prints instruction + body
-    backend/.venv/Scripts/python -u spikes/fo_send_voice_test.py --yes-send   # real send (only after Het says yes)
+    backend/.venv/Scripts/python -u spikes/fo_send_voice_test.py --yes-send   # real send (only after a team member approves)
     ... --tag SEALED-XXXXXXXX --watch 15                                      # later: watch for the reply via MCP
 
 Measures:
@@ -169,7 +169,7 @@ async def watch(tag: str, minutes: float) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--yes-send", action="store_true", help="actually send (only after Het approves)")
+    ap.add_argument("--yes-send", action="store_true", help="actually send (only after a team member approves)")
     ap.add_argument("--tag", help="existing tag (for --watch)")
     ap.add_argument("--watch", type=float, help="minutes to watch for the reply via MCP")
     args = ap.parse_args()
@@ -188,7 +188,7 @@ def main() -> None:
     if problems:
         sys.exit("guard failed; not sending")
     if not args.yes_send:
-        print("\nDry run only. Re-run with --yes-send after Het approves.")
+        print("\nDry run only. Re-run with --yes-send after a team member approves.")
         return
     record("built", tag=tag, to=RECIPIENT, cc=CC, subject=subject, email_body=body, fo_instruction=instruction)
     try:

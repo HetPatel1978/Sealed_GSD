@@ -1,7 +1,7 @@
-"""Spike 1d: ask Fo to place ONE outbound call to Het's own phone and read a short, true, non-price script.
+"""Spike 1d: ask Fo to place ONE outbound call to a team member's own phone and read a short, true, non-price script.
 
     backend/.venv/Scripts/python -u spikes/fo_call_test.py              # dry run: prints the instruction (phone masked)
-    backend/.venv/Scripts/python -u spikes/fo_call_test.py --yes-call   # real call (only after Het says yes)
+    backend/.venv/Scripts/python -u spikes/fo_call_test.py --yes-call   # real call (only after a team member approves)
 
 The phone number comes from SEALED_TEST_PHONE (set it in .env locally; never commit it).
 Measures: confirmation first? does the call happen? does Fo stay on the script or add claims? does a
@@ -117,12 +117,12 @@ async def run(phone: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--yes-call", action="store_true", help="actually place the call (only after Het approves)")
+    ap.add_argument("--yes-call", action="store_true", help="actually place the call (only after a team member approves)")
     args = ap.parse_args()
     phone = os.getenv("SEALED_TEST_PHONE", "").strip()
     print("=== INSTRUCTION TO FO (phone masked) ===\n" + instruction("<SEALED_TEST_PHONE>"))
     if not args.yes_call:
-        print("\nDry run only. Set SEALED_TEST_PHONE in .env and re-run with --yes-call after Het approves.")
+        print("\nDry run only. Set SEALED_TEST_PHONE in .env and re-run with --yes-call after a team member approves.")
         return
     if not phone:
         sys.exit("SEALED_TEST_PHONE is not set")

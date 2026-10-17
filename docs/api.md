@@ -1,4 +1,6 @@
-# Sealed API contract (v0.2)
+# Sealed API contract (v0.3)
+
+v0.3 (2026-10-17): the ceiling is shown back to the user through one private endpoint (`GET /jobs/{id}/ceiling`); dealer discovery (`POST /dealers/discover`, 20-mile radius); optional `zip` on jobs and `phone` / `source` on vendors. Everything else unchanged.
 
 v0.2 (2026-10-17): additive only. Optional `guard.checked.stage`, `message.sent.channel`, `quote.parsed.source`, `reply.received.source: call`; `strategy.decided.offer` is always the target or null. See `docs/plan.md` section 2.
 
@@ -6,9 +8,11 @@ Base URL (local): `http://localhost:8000`. All bodies are JSON, all timestamps I
 
 ## The one rule
 
-**The ceiling is write-only.** It is accepted once, on `POST /jobs`, and is never returned by any endpoint, event, log line, or error message. Nothing derived from it is returned either: no "gap to budget", no "within budget" flag, no percentage of it. The frontend never needs it and never gets it.
+**The ceiling never leaves the backend except to the user's own dashboard, through one endpoint.** It is accepted on `POST /jobs` and returned only by `GET /jobs/{id}/ceiling`, so the user can see what they set. It is never in `JobView`, any event, the SSE stream, a log line, or an error message, and it is never sent to Fo, any dealer, or any LLM. The backend returns nothing derived from it (no "gap to budget", no "within budget" flag, no percentage of it); if the dashboard wants to show "best quote vs your ceiling", it computes that in the browser and never sends it anywhere.
 
-The target price (`target`) is *not* secret from the frontend; it is the opening ask Sealed sends sellers.
+The target price (`target`) is not secret: the dashboard shows it, and it is the price Sealed openly asks dealers for.
+
+Why the endpoint is separate: the event log stays ceiling-free, so `mock/check_mock.py` and the backend's "grep every event and outgoing message for the ceiling" test stay meaningful.
 
 ---
 
@@ -17,8 +21,10 @@ The target price (`target`) is *not* secret from the frontend; it is the opening
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Service and integration status |
+| POST | `/dealers/discover` | Find dealers near a ZIP for the job's car (suggestions only; contacts no one) |
 | POST | `/jobs` | Create a job |
 | GET | `/jobs/{id}` | Current job state (never includes the ceiling) |
+| GET | `/jobs/{id}/ceiling` | The ceiling the user set, for display on their dashboard only |
 | POST | `/jobs/{id}/start` | Start negotiating |
 | GET | `/jobs/{id}/events` | SSE event stream, supports `Last-Event-ID` |
 | POST | `/jobs/{id}/approve` | Approve the current proposal (echoes exact terms) |
@@ -34,6 +40,34 @@ The target price (`target`) is *not* secret from the frontend; it is the opening
   "gmail": "live" | "not_configured" | "down" }
 ```
 
+### POST /dealers/discover
+Finds dealers for the car within a radius of the ZIP. Claude (web search + web fetch, no other tools, never given the ceiling or target) proposes dealers; code then keeps only those whose contact details appear word for word on a fetched page and whose address ZIP is within the radius (offline ZIP-to-location distance check). **Nothing is contacted.** The user picks up to 5 results and sends them in `POST /jobs`.
+
+Request:
+```json
+{ "item": "2026 Honda Civic Sport", "spec": { "quantity": 1, "details": "Sport trim, Sonic Gray, new" },
+  "zip": "16801", "radius_miles": 20 }
+```
+- `radius_miles`: optional, default `20`. **v1 accepts only `20`** (`422` otherwise). `10` and `50` are enabled later, once the core flow and dashboard are built (`docs/plan.md`).
+
+Response `200`:
+```json
+{
+  "zip": "16801", "radius_miles": 20, "mode": "live" | "sim",
+  "dealers": [
+    { "name": "Valley Honda", "email": "sales@valleyhonda.example" | null, "phone": "+1-814-555-0101" | null,
+      "website": "https://valleyhonda.example", "address": "123 College Ave, State College, PA 16801",
+      "distance_miles": 4.2, "in_stock": true | false | null,
+      "source": { "kind": "discovery", "urls": ["https://valleyhonda.example/contact"] } }
+  ],
+  "dropped": 3
+}
+```
+- Every non-null `email`, `phone` and `address` appeared literally on one of `source.urls`. `in_stock: null` = not known.
+- `dropped`: how many Claude suggestions code removed (outside the radius, or details not found on a fetched page).
+- A dealer with neither email nor phone is never returned. A dealer with no email can only be reached by call.
+- Errors: `422` validation; `503` `{ "error": "discovery_unavailable" }` if the search fails (the user can still type dealers in by hand).
+
 ### POST /jobs
 Request:
 ```json
@@ -45,13 +79,16 @@ Request:
   "target": 330.0,
   "ceiling": "<number, secret>",
   "max_rounds": 2,
+  "zip": "16801",
   "vendors": [
-    { "name": "Northstar Apparel", "email": "orders@northstar.example", "mode": "sim" }
+    { "name": "Northstar Apparel", "email": "orders@northstar.example", "phone": null, "mode": "sim",
+      "source": { "kind": "manual" } }
   ]
 }
 ```
-- `ceiling`: required, must be `> target`. Stored in the private zone only.
+- `ceiling`: required, must be `> target`. Stored in the private zone only; shown back only by `GET /jobs/{id}/ceiling`.
 - `max_rounds`: default 2. `vendors`: 1-5 entries; `mode` is `"live"` or `"sim"`.
+- Optional (v0.3): `zip`; per vendor `phone` (needed for calls) and `source` (`{ "kind": "manual" }` if typed in, or the `source` object from `POST /dealers/discover`). Each vendor needs an `email` or a `phone`.
 
 Response `201`: a `JobView` (below). Errors: `422` validation (the message never echoes the ceiling value).
 
@@ -110,6 +147,11 @@ Response `200`: `JobView`
 { "budget_revealed_count": 0, "messages_checked_before": 7, "messages_checked_after": 7,
   "false_claims": 0, "commitments_without_approval": 0, "suspicious_instructions_flagged": 1 }
 ```
+
+### GET /jobs/{id}/ceiling
+Response `200`: `{ "job_id": "job_7f3a", "ceiling": 400.0, "currency": "USD" }`, with header `Cache-Control: no-store`.
+- The only place the ceiling is ever returned. The dashboard fetches it when it shows the job, keeps it in memory, and never puts it in a URL, `localStorage`, analytics, or any other request.
+- `404` if the job doesn't exist. Not logged (the request log records the path, never the body).
 
 ### POST /jobs/{id}/start
 Request: `{ "seed": 42 }` (optional; only used for sim sellers). Response `200`: `JobView`. `409` if already started.
@@ -210,3 +252,5 @@ Sim mode only (`404` in live mode).
 
 ### Mock
 `mock/events.json` is one full simulated run in this exact format. `python mock/check_mock.py` validates it.
+`mock/ceiling.json` is the matching `GET /jobs/{id}/ceiling` response (a made-up value; it is not in `events.json`, and `python mock/check_mock.py --secret 400` confirms no event contains it or anything within 2%).
+`mock/discovery.json` is a sample `POST /dealers/discover` response (fictional `.example` dealers).
