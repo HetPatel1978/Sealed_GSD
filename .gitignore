@@ -35,3 +35,6 @@ next-env.d.ts
 Thumbs.db
 .vscode/
 .idea/
+
+# Spike logs (contain conversation ids and email text)
+spikes/logs/

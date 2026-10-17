@@ -67,3 +67,46 @@ Tool annotations: `ask_fo` is `destructive_hint: true, idempotent_hint: false, o
 - Token refresh after 1 hour.
 - Concurrency: two `ask_fo` calls on different conversations at once.
 - Spike 1b items (verbatim body, subject tag, confirmation turn, threading), which need real sends to a teammate.
+
+## Spike 1b: real send through Fo (2026-10-17, 16:29 UTC)
+
+Script: `spikes/fo_send_test.py`; builder: `backend/sealed/fo/messages.py` (`fo_instruction` wrapper + verbatim `email_body`). Recipient: rfb5381@psu.edu only. Tag: `SEALED-B617C518`. Body contained no digits or prices (checked before sending).
+
+**Result: Fo refused to send.** Nothing was emailed (confirmed: no Gmail thread with the tag, nothing from fo@wajo.ai in the last day). `ask_fo` returned `complete` after 53.2 s with:
+
+> The send got stopped on my end: the message is written in your voice and signed "Het," and I can only send openly as your assistant, not as you. Two ways forward:
+> 1. I send the same email from my address, openly as your assistant ("I'm Fo, writing on behalf of Het Patel..."), same subject and same asks.
+> 2. You send it yourself from your own inbox so it reads in your voice; the text is ready to copy from above.
+>
+> Want me to go with option 1?
+
+We did not answer. Option 1 means Fo rewrites the body, which breaks "verbatim" and needs a decision.
+
+| Question | Answer |
+|---|---|
+| Body verbatim? | **Not testable yet**: Fo won't send first-person text signed by the user. |
+| Subject tag kept? | Not testable yet (nothing sent). Fo said it would keep "same subject". |
+| `working` / `get_fo_reply` path? | **No.** Both turns returned `complete` directly from `ask_fo` (53 s each). Still untested. |
+| Confirmation turn? | Not the Oct 15 "Good to send it?". Instead a policy refusal plus a counter-offer, as a `complete` reply ending in a question. |
+
+**Design consequence:** Fo enforces "send openly as the assistant, never impersonate the user". The message builder must write `email_body` in Fo's voice (e.g. "I'm Fo, Het Patel's assistant…", signed as Fo on Het's behalf). Then test whether Fo sends *that* verbatim.
+
+### Concurrency
+Two `ask_fo` calls in new conversations at the same instant over one MCP session (the send above + "what is today's date?"):
+- **Both completed, no mix-up**: distinct `conversationId`s, each reply matched its own question ("It's Saturday, October 17, 2026.").
+- **But the trivial question took 53.3 s** (vs 16 s alone in spike 1a), and both finished within 0.2 s of each other. Looks like Fo processes **one turn per account at a time** (or queued the second behind the first). Not proven; plan the send queue as serial.
+
+## Spike 2: Gmail over IMAP
+
+`spikes/gmail_read.py` is written (read-only `[Gmail]/All Mail`, X-GM-RAW search on the tag, CC-copy audit with unified diff, 30 s polling for the reply from rfb5381@psu.edu, quoted-history stripping via `email-reply-parser`, threading check on tag / In-Reply-To / References / X-GM-THRID).
+
+**Not run yet:** no `.env` with `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD`, and no email was sent to audit. Connectivity check once `.env` exists: `python spikes/gmail_read.py --query "Quote request test"`.
+
+## Token refresh (2026-10-17, 16:37 UTC)
+
+**Works, no browser.** `spikes/token_refresh.py` ran with 288 s left on the access token:
+- POST `https://mcp.api.wajo.ai/oauth/token` with `grant_type=refresh_token`, `client_id`, `resource` → new access token, `expires_in: 3600`.
+- **The refresh token rotates** on every refresh. The new one must be saved immediately, or the next refresh fails.
+- The new token worked for a read-only `list_fo_conversations` (8 conversations), sent as a plain Bearer header.
+
+**SDK gotcha (important for the adapter):** mcp SDK 2.3 does not remember expiry for tokens loaded from storage. It sends the expired token, gets 401, then starts a **full browser sign-in** instead of refreshing. `backend/sealed/fo/auth.py` fixes this: `FileTokenStorage` records an absolute `expires_at`, and `refresh_if_needed()` refreshes before connecting when under 5 minutes are left.
