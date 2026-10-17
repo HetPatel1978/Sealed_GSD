@@ -1,0 +1,326 @@
+"""Job engine: runs the fixed round plan for one job and writes the event stream (docs/api.md v0.2).
+
+The engine never touches the ceiling. It is given:
+  - a `qualifier` callable (bound to the job in the private zone), which answers propose / needs_human,
+  - a `checker` object for the guard, which answers yes/no,
+  - a `transport` (sim now; the live Fo adapter in step 2).
+"""
+
+import re
+from dataclasses import dataclass, field, replace
+from typing import Callable, Protocol
+
+from sealed.core import strategy
+from sealed.core.events import EventLog
+from sealed.core.guard import Guard
+from sealed.core.ledger import Ledger
+from sealed.core.models import Decision, Inbound, Job, Outbound, Quote
+from sealed.fo import messages
+
+
+@dataclass
+class SendResult:
+    sent: bool
+    sent_at: float
+    sent_copy: str | None = None          # the CC copy as delivered (email only)
+    errors: list[dict] = field(default_factory=list)   # e.g. a Fo turn timeout that was polled, not resent
+
+
+class Transport(Protocol):
+    def send(self, now: float, msg: Outbound, approve_preview: Callable[[str], bool]) -> SendResult: ...
+
+
+@dataclass(frozen=True)
+class Waits:
+    """Fixed timings in minutes from job start. Never depend on the ceiling."""
+    nudge_after: float = 180
+    round1_close: float = 240
+    round2_call_after: float = 180         # after round 1 closes
+    round2_close: float = 480
+
+
+class StaleProposal(Exception):
+    pass
+
+
+def _squash(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+class Engine:
+    def __init__(self, job: Job, transport: Transport, checker, qualifier, *, cc: str, tag: str,
+                 waits: Waits = Waits(), log: EventLog | None = None):
+        self.job, self.transport, self.qualifier = job, transport, qualifier
+        self.guard = Guard(checker)
+        self.cc, self.tag, self.waits = cc, tag, waits
+        self.log = log or EventLog(job.id, job.run_id, job.mode)
+        self.ledger = Ledger(job.deadline)
+        self.state = "CREATED"
+        self.round = 1
+        self.started_at = 0.0
+        self.contacted: set[str] = set()
+        self.nudged: set[str] = set()
+        self.called: set[str] = set()
+        self.firm_up_sent: set[str] = set()
+        self.flagged: set[str] = set()
+        self.price_match_sent: dict[str, float] = {}
+        self.last_written_at: dict[str, float] = {}
+        self.sent_keys: set[tuple] = set()
+        self.rejected_quotes: set[str] = set()
+        self.proposal: dict | None = None
+        self.winner: str | None = None
+        self.booking_message: str | None = None
+        self._n_msg = self._n_reply = self._n_prop = 0
+        self.trust = {"budget_revealed_count": 0, "messages_checked_before": 0, "messages_checked_after": 0,
+                      "false_claims": 0, "commitments_without_approval": 0, "suspicious_instructions_flagged": 0}
+
+    # ---- lifecycle -------------------------------------------------------------------------------------
+    def create(self, now: float) -> None:
+        j = self.job
+        self.log.emit(now, "job.created", None, {
+            "item": j.item, "spec": {"quantity": 1, "details": j.details, "zip": j.zip}, "deadline": j.deadline,
+            "currency": j.currency, "target": j.target, "max_rounds": j.max_rounds,
+            "vendors": [{"id": d.id, "name": d.name, "email": d.email, "mode": d.mode} for d in j.dealers]})
+
+    def start(self, now: float, seed: int | None = None) -> float:
+        self.state, self.started_at = "RUNNING", now
+        self.log.emit(now, "job.started", None, {"seed": seed, "round": 1})
+        t = now
+        for d in self.job.dealers:
+            t = self._send(t, Decision(d.id, "rfq", "rfq", reason="Round 1 request for a written out-the-door total."),
+                           decided=False)
+        return t
+
+    def timers(self) -> list[tuple[float, str]]:
+        w, s = self.waits, self.started_at
+        return [(s + w.nudge_after, "nudge"), (s + w.round1_close, "round1_close"),
+                (s + w.round1_close + w.round2_call_after, "round2_calls"), (s + w.round2_close, "round2_close")]
+
+    def on_timer(self, now: float, name: str) -> float:
+        if self.state != "RUNNING":
+            return now
+        t = now
+        if name == "nudge":
+            for d in strategy.call_nudges(self.job, self.ledger, self.contacted, self.nudged):
+                self.nudged.add(d.dealer_id)
+                t = self._send(t, d)
+        elif name == "round1_close":
+            self.round = 2
+            for d in strategy.round2(self.job, self.ledger):
+                t = self._send(t, d)
+                if d.kind == "price_match":
+                    self.price_match_sent[d.dealer_id] = t
+        elif name == "round2_calls":
+            for d in strategy.round2_calls(self.job, self.ledger, self.price_match_sent, self.last_written_at,
+                                           self.called):
+                self.called.add(d.dealer_id)
+                t = self._send(t, d)
+        elif name == "round2_close":
+            self._qualify(t, "Round 2 closed.")
+        return t
+
+    # ---- inbound ---------------------------------------------------------------------------------------
+    def on_inbound(self, now: float, inbound: Inbound) -> float:
+        self._n_reply += 1
+        rid = f"r_{self._n_reply:02d}"
+        dealer = self.job.dealer(inbound.dealer_id)
+        src = {"email": "vendor_email", "call": "call", "fo_relay": "fo_relay"}[inbound.source]
+        self.log.emit(now, "reply.received", dealer.id, {
+            "reply_id": rid, "in_reply_to": inbound.in_reply_to, "source": src,
+            "from": inbound.from_addr or (dealer.email if inbound.source == "email" else "fo@wajo.ai"),
+            "subject": f"Re: {messages.subject_for(self.job, self.tag, 'rfq')}" if inbound.source == "email" else None,
+            "text": inbound.text,
+            "evidence": {"kind": "gmail_message" if inbound.source == "email" else "fo_conversation",
+                         "ref": f"{self.job.mode}-{rid}"}})
+
+        if (self.state == "BOOKING" and dealer.id == self.winner and inbound.source == "email"
+                and inbound.parsed.confirms_booking):
+            self.log.emit(now + 0.2, "quote.verified", dealer.id, {
+                "subject_id": self.booking_message, "status": "VERIFIED",
+                "reason": "Dealer's own confirmation email is in your inbox.",
+                "evidence": {"kind": "gmail_message", "ref": f"{self.job.mode}-{rid}"}})
+            self._complete(now + 0.3)
+            return now
+
+        q = self.ledger.add(rid, inbound, now)
+        if inbound.source == "email":
+            self.last_written_at[dealer.id] = now
+            self.contacted.add(dealer.id)
+        self.log.emit(now + 0.2, "quote.parsed", dealer.id, {
+            "reply_id": rid, "quote_id": q.quote_id, "source": "call" if q.source == "call" else "email",
+            "price_total": q.price_total, "price_unit": q.price_total, "derived_total": False,
+            "currency": self.job.currency, "firm": q.firm, "hedge_words": list(q.hedge_words),
+            "delivery_date": q.available, "meets_deadline": q.meets_deadline, "meets_spec": q.meets_spec,
+            "declined": q.declined, "suspicious_instructions": q.suspicious,
+            "numbers_grounded": inbound.parsed.numbers_grounded})
+        if q.price_total is not None and not q.declined:
+            verified = inbound.source == "email" and (inbound.from_addr in (None, dealer.email))
+            self.log.emit(now + 0.3, "quote.verified", dealer.id, {
+                "subject_id": q.quote_id, "status": "VERIFIED" if verified else "UNVERIFIED",
+                "reason": "Dealer's own email is in your inbox." if verified else
+                ("Spoken on a call. Not firm until it arrives in writing." if q.source == "call"
+                 else "Relayed by Fo; not the dealer's own email."),
+                "evidence": {"kind": "gmail_message" if verified else "fo_conversation",
+                             "ref": f"{self.job.mode}-{rid}"}})
+
+        t = now + 0.4
+        d = strategy.after_reply(q, q.dealer_id in self.firm_up_sent, q.dealer_id in self.flagged)
+        if d and d.action == "needs_human":
+            self.flagged.add(q.dealer_id)
+            self.trust["suspicious_instructions_flagged"] = len(self.flagged)
+            self._decided(t, replace(d, round=self.round))
+            self.log.emit(t + 0.1, "job.needs_human", q.dealer_id, {
+                "reason_code": "suspicious_instruction", "blocking": False,
+                "message": f"{dealer.name}'s reply claims something Sealed never said or agreed to. "
+                           "Nothing was confirmed or paid. Review it before approving this dealer."})
+        elif d and d.action == "firm_up" and self.state == "RUNNING":
+            self.firm_up_sent.add(q.dealer_id)
+            t = self._send(t, replace(d, round=self.round))
+
+        if self.state == "WAITING_AFTER_REJECT" and q.firm:
+            self._qualify(t + 0.1, "New firm written quote after a rejected proposal.")
+        return t
+
+    # ---- approval --------------------------------------------------------------------------------------
+    def approve(self, now: float, echo: dict) -> float:
+        p = self.proposal
+        keys = ("proposal_id", "vendor_id", "price_total", "currency", "delivery_date")
+        if self.state != "AWAITING_APPROVAL" or p is None or any(echo.get(k) != p[k] for k in keys):
+            raise StaleProposal("approval does not match the current proposal")
+        self.log.emit(now, "job.approved", p["vendor_id"], {k: p[k] for k in keys if k != "vendor_id"})
+        self.state, self.winner = "BOOKING", p["vendor_id"]
+        t = self._send(now + 0.5, Decision(p["vendor_id"], "propose", "booking", round=self.round,
+                                           reason="User approved the exact terms."),
+                       decided=False, approved_price=p["price_total"])
+        for d in self.job.dealers:
+            if d.id != self.winner and d.id in self.contacted:
+                t = self._send(t, Decision(d.id, "propose", "cancel", round=self.round,
+                                           reason="Polite decline after approval."), decided=False)
+        return t
+
+    def reject(self, now: float, proposal_id: str, reason: str = "") -> None:
+        p = self.proposal
+        if self.state != "AWAITING_APPROVAL" or p is None or p["proposal_id"] != proposal_id:
+            raise StaleProposal("no such current proposal")
+        self.log.emit(now, "job.rejected", p["vendor_id"], {"proposal_id": proposal_id, "reason": reason})
+        self.rejected_quotes.add(p["quote_id"])
+        self.proposal, self.state = None, "WAITING_AFTER_REJECT"
+
+    # ---- internals -------------------------------------------------------------------------------------
+    def _decided(self, t: float, d: Decision) -> None:
+        data = {"round": d.round, "action": d.action, "offer": d.offer, "reason": d.reason}
+        if d.cited_quote_id:
+            data |= {"cited_quote_id": d.cited_quote_id, "cited_price": d.cited_price}
+        if d.channel == "call":
+            data["channel"] = "call"
+        self.log.emit(t, "strategy.decided", d.dealer_id, data)
+
+    def _send(self, t: float, d: Decision, decided: bool = True, approved_price: float | None = None) -> float:
+        key = (d.dealer_id, d.round, d.kind, d.channel)
+        if key in self.sent_keys:            # dedupe: never send the same step twice
+            return t
+        if decided:
+            self._decided(t, d)
+            t += 0.1
+        self._n_msg += 1
+        msg = messages.build(self.job, d, f"m_{self._n_msg:02d}", self.tag, self.cc, approved_price)
+        pre = self.guard.check(msg)
+        self.trust["messages_checked_before"] += 1
+        self._guard_event(t, msg, pre)
+        if not pre.passed:
+            self.log.emit(t + 0.1, "job.needs_human", d.dealer_id, {
+                "reason_code": "guard_blocked", "blocking": False,
+                "message": f"A {d.kind} {d.channel} to {self.job.dealer(d.dealer_id).name} was blocked by the "
+                           "pre-send guard and not sent."})
+            return t + 0.2
+        self.sent_keys.add(key)
+
+        def approve_preview(preview: str) -> bool:
+            res = self.guard.check(msg, preview=preview)
+            self._guard_event(t + 0.5, msg, res)
+            return res.passed
+
+        result = self.transport.send(t, msg, approve_preview)
+        for err in result.errors:
+            self.log.emit(t + 0.6, "error", d.dealer_id, err)
+        if not result.sent:
+            self.log.emit(result.sent_at, "job.needs_human", d.dealer_id, {
+                "reason_code": "audit_mismatch", "blocking": True,
+                "message": "Fo's preview did not match the exact text. Nothing was sent; please review."})
+            self.state = "NEEDS_HUMAN"
+            return result.sent_at
+        st = result.sent_at
+        self.log.emit(st, "message.sent", d.dealer_id, {
+            "message_id": msg.message_id, "kind": msg.kind, "round": msg.round, "channel": msg.channel,
+            "to": msg.to if msg.channel == "email" else f"{self.job.dealer(d.dealer_id).name} sales line",
+            "subject": msg.subject, "body": msg.body, "offer": msg.offer, "cited_quote_id": msg.cited_quote_id})
+        if d.dealer_id not in self.contacted and msg.kind == "rfq":
+            self.contacted.add(d.dealer_id)
+            self.log.emit(st, "vendor.contacted", d.dealer_id, {"message_id": msg.message_id, "round": msg.round})
+        if msg.kind == "booking":
+            self.booking_message = msg.message_id
+        if msg.channel == "email" and result.sent_copy is not None:
+            self._audit(st + 1, msg, result.sent_copy)
+        return st + 1
+
+    def _guard_event(self, t: float, msg: Outbound, res) -> None:
+        self.log.emit(t, "guard.checked", msg.dealer_id, {
+            "message_id": msg.message_id, "kind": msg.kind, "round": msg.round, "passed": res.passed,
+            "stage": res.stage, "rules": res.rules})
+
+    def _audit(self, t: float, msg: Outbound, copy: str) -> None:
+        res = self.guard.check(replace(msg, body=copy))
+        rules = {r["rule"]: r["passed"] for r in res.rules}
+        matched = _squash(copy) == _squash(msg.body)
+        self.trust["messages_checked_after"] += 1
+        self.trust["budget_revealed_count"] += 0 if rules["secret_checker"] and rules["limit_language"] else 1
+        self.trust["false_claims"] += 0 if rules["leverage_grounded"] else 1
+        self.trust["commitments_without_approval"] += 0 if rules["commitment_words"] else 1
+        self.log.emit(t, "audit.checked", msg.dealer_id, {
+            "message_id": msg.message_id, "cc_copy_found": True, "matched": matched,
+            "diff": None if matched else "Fo's sent copy differs from our text.", "guard_passed": res.passed})
+        if not matched or not res.passed:
+            self.log.emit(t + 0.1, "job.needs_human", msg.dealer_id, {
+                "reason_code": "audit_mismatch", "blocking": False,
+                "message": "The copy Fo sent differs from our text or failed a check. Not resent; please review."})
+
+    def _qualify(self, t: float, why: str) -> None:
+        res = self.qualifier(self.ledger.quotes, set(self.flagged), set(self.rejected_quotes))
+        if res.action == "propose":
+            q: Quote = res.quote
+            self._decided(t, Decision(q.dealer_id, "propose", "none", round=self.round, reason=f"{why} {res.reason}"))
+            self._n_prop += 1
+            first = self.first_quote()
+            p = {"proposal_id": f"p_{self._n_prop:02d}", "vendor_id": q.dealer_id, "quote_id": q.quote_id,
+                 "price_total": q.price_total, "currency": self.job.currency, "delivery_date": q.available,
+                 "flags": list(res.flags)}
+            self.proposal = p
+            s_abs = round(first - q.price_total, 2) if first else 0.0
+            self.log.emit(t + 0.1, "proposal.created", q.dealer_id, {
+                "proposal_id": p["proposal_id"], "quote_id": q.quote_id, "price_total": q.price_total,
+                "currency": self.job.currency, "delivery_date": q.available, "first_quote": first,
+                "savings_abs": s_abs, "savings_pct": round(100 * s_abs / first, 2) if first else 0.0,
+                "flags": list(res.flags)})
+            self.log.emit(t + 0.2, "approval.requested", q.dealer_id, {"proposal_id": p["proposal_id"]})
+            self.state = "AWAITING_APPROVAL"
+        else:
+            closest = res.quote
+            self.log.emit(t, "job.needs_human", closest.dealer_id if closest else None, {
+                "reason_code": res.reason_code, "blocking": True, "message": res.reason,
+                **({"closest": {"vendor_id": closest.dealer_id, "price_total": closest.price_total,
+                                "delivery_date": closest.available, "flags": list(res.flags)}} if closest else {})})
+            self.state = "NEEDS_HUMAN"
+
+    def first_quote(self) -> float | None:
+        firm = sorted(self.ledger.firm(), key=lambda q: q.received_at)
+        return firm[0].price_total if firm else None
+
+    def _complete(self, t: float) -> None:
+        first = self.first_quote()
+        best = self.proposal["price_total"]
+        s_abs = round(first - best, 2)
+        self.log.emit(t, "job.completed", self.winner, {
+            "vendor_id": self.winner, "first_quote": first, "best_quote": best, "savings_abs": s_abs,
+            "savings_pct": round(100 * s_abs / first, 2), "rounds": self.round,
+            "duration_s": int(round((t - self.started_at) * 60)), "trust": dict(self.trust)})
+        self.state = "COMPLETED"
