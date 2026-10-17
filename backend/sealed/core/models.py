@@ -44,6 +44,7 @@ class ParsedReply:
     suspicious: bool = False
     confirms_booking: bool = False
     numbers_grounded: bool = True
+    breakdown: dict | None = None     # itemised parts as the dealer wrote them (see sealed.core.breakdown)
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,8 @@ class Quote:
     declined: bool
     suspicious: bool
     received_at: float
+    breakdown: dict | None = None
+    breakdown_flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class Decision:
     round: int = 1
     offer: float | None = None        # only ever the target
     own_price: float | None = None
+    own_quote_id: str | None = None
     cited_quote_id: str | None = None
     cited_price: float | None = None
     reason: str = ""
@@ -105,3 +109,5 @@ class Outbound:
     cited_quote_id: str | None = None
     allowed_prices: frozenset[float] = field(default_factory=frozenset)
     booking_approved: bool = False
+    # (value, source, quote_id): source is "ledger" or "target"; every price the message may state
+    price_sources: tuple[tuple[float, str, str | None], ...] = ()

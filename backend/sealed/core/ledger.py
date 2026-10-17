@@ -3,6 +3,7 @@
 A price heard on a call, or relayed by Fo, is stored but never firm.
 """
 
+from sealed.core import breakdown as bd
 from sealed.core.models import Inbound, Quote
 
 
@@ -20,11 +21,13 @@ class Ledger:
     def add(self, reply_id: str, inbound: Inbound, now: float) -> Quote:
         p = inbound.parsed
         self._n += 1
+        clean, flags = bd.validate(p.breakdown, inbound.text, p.price_total)
         q = Quote(
             quote_id=f"q_{self._n:02d}", dealer_id=inbound.dealer_id, reply_id=reply_id, source=inbound.source,
             price_total=p.price_total, firm=is_firm(inbound.source, p), meets_spec=p.meets_spec,
             meets_deadline=None if p.available is None else p.available <= self.deadline, available=p.available,
             hedge_words=tuple(p.hedge_words), declined=p.declined, suspicious=p.suspicious, received_at=now,
+            breakdown=clean, breakdown_flags=tuple(flags),
         )
         self.quotes.append(q)
         return q

@@ -136,19 +136,56 @@ def subject_for(job: Job, tag: str, kind: str) -> str:
     return base if kind == "rfq" else f"Re: {base}"
 
 
+def price_sources(d: Decision, approved_price: float | None) -> tuple[tuple[float, str, str | None], ...]:
+    out = []
+    if d.own_price is not None:
+        out.append((d.own_price, "ledger", d.own_quote_id))
+    if d.cited_price is not None:
+        out.append((d.cited_price, "ledger", d.cited_quote_id))
+    if d.offer is not None:
+        out.append((d.offer, "target", None))
+    if approved_price is not None:
+        out.append((approved_price, "ledger", d.own_quote_id))
+    return tuple(out)
+
+
+def number_provenance(msg: Outbound, job: Job) -> list[dict]:
+    """Every distinct number in the message and where it came from: a ledger quote, the target, or the job spec
+    (model year, ZIP, timeline). Anything else is reported as `unknown` (the guard blocks unknown prices)."""
+    from sealed.core.guard import MONEY, money_values
+    from sealed.core.numbers import numbers_in
+    out, seen = [], set()
+    for v in money_values(msg.body):
+        if v in seen:
+            continue
+        seen.add(v)
+        src = next((s for s in msg.price_sources if s[0] == v), None)
+        item = {"value": v, "source": src[1] if src else "unknown"}
+        if src and src[2]:
+            item["quote_id"] = src[2]
+        out.append(item)
+    job_numbers = set(numbers_in(" ".join((job.item, job.details, job.zip, job.timeline, "quantity 1"))))
+    for v in numbers_in(MONEY.sub(" ", msg.body)):
+        if v not in seen:
+            seen.add(v)
+            out.append({"value": v, "source": "job" if v in job_numbers else "unknown"})
+    return out
+
+
 def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_price: float | None = None) -> Outbound:
     dealer = job.dealer(d.dealer_id)
     allowed = {p for p in (d.own_price, d.cited_price, d.offer, approved_price) if p is not None}
+    sources = price_sources(d, approved_price)
     if d.channel == "call":
         body = call_brief(job, d, dealer.name, cc)
         return Outbound(message_id, d.dealer_id, d.kind, "call", d.round, dealer.phone or "", None, body,
                         wrap_call_for_fo(dealer.name, dealer.phone or "", body), d.offer, d.cited_quote_id,
-                        frozenset(allowed))
+                        frozenset(allowed), price_sources=sources)
     body = email_body(job, d, dealer.name, approved_price)
     subject = subject_for(job, tag, d.kind)
     return Outbound(message_id, d.dealer_id, d.kind, "email", d.round, dealer.email, subject, body,
                     wrap_for_fo(dealer.email, cc, subject, body), d.offer, d.cited_quote_id, frozenset(allowed),
-                    booking_approved=d.kind == "booking" and approved_price is not None)
+                    booking_approved=d.kind == "booking" and approved_price is not None, price_sources=sources)
 
 
 # --- Legacy (spike 1b only): first-person text signed by the user. Fo refuses to send this. -------------

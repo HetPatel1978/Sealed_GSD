@@ -34,6 +34,13 @@ def default_job() -> Job:
         ))
 
 
+def bd(vehicle, fees, add_ons, taxes, title_reg, total, valid_until) -> dict:
+    """A breakdown exactly as a sim dealer wrote it (amounts appear in the dealer's text)."""
+    return {"vehicle_price": vehicle, "dealer_fees": [{"label": l, "amount": a} for l, a in fees],
+            "add_ons": [{"label": l, "amount": a} for l, a in add_ons], "taxes": taxes,
+            "title_registration": title_reg, "other": [], "out_the_door_total": total, "valid_until": valid_until}
+
+
 def default_dealers(job: Job) -> dict[str, SimDealer]:
     P = ParsedReply
     d = {x.id: x for x in job.dealers}
@@ -41,8 +48,10 @@ def default_dealers(job: Job) -> dict[str, SimDealer]:
         "v_northline": SimDealer(d["v_northline"], {
             ("rfq", "email"): [Response(44, "email",
                 "Hi, thanks for reaching out. We have the Civic Sport in Crystal Black Pearl in stock. Out-the-door "
-                "total is $31,240 including tax, title, registration and our $499 doc fee. Price good for 7 days.",
-                P(31240.0, True, available="2026-10-24"))],
+                "total is $31,240: vehicle price $28,650, doc fee $499, sales tax $1,719, title and registration "
+                "$372. Price good for 7 days.",
+                P(31240.0, True, available="2026-10-24", breakdown=bd(
+                    28650, [("Doc fee", 499)], [], 1719, 372, 31240, "2026-10-24")))],
             ("price_match", "email"): [Response(48, "email",
                 "We'll stay at $31,240. That's already a strong price for this car.",
                 P(31240.0, True, available="2026-10-24"))],
@@ -52,8 +61,10 @@ def default_dealers(job: Job) -> dict[str, SimDealer]:
                 "MSRP is $27,800 plus fees. When can you come in for a test drive?",
                 P(27800.0, False, hedge_words=("MSRP", "plus fees", "come in")))],
             ("firm_up", "email"): [Response(133, "email",
-                "Out-the-door total: $30,980 including tax, title, registration and doc fee. Available now.",
-                P(30980.0, True, available="2026-10-22"))],
+                "Out-the-door total: $30,980. Vehicle $28,280, doc fee $449, nitrogen-filled tires $199, sales tax "
+                "$1,709, title and registration $343. Available now.",
+                P(30980.0, True, available="2026-10-22", breakdown=bd(
+                    28280, [("Doc fee", 449)], [("Nitrogen-filled tires", 199)], 1709, 343, 30980, None)))],
             ("price_match", "call"): [Response(7, "call",
                 "Call summary: the internet manager said they could probably do \"about $30,400\" and would email a "
                 "revised total. Fo said it couldn't agree to anything and asked for the number in writing.",
@@ -68,8 +79,10 @@ def default_dealers(job: Job) -> dict[str, SimDealer]:
                     {"role": "assistant", "text": "Thanks. Please send that by email so Arjun can compare it."},
                 ))],
             ("price_match", "email"): [Response(270, "email",
-                "Revised out-the-door total: $30,450, all tax and fees included, no add-ons. Valid 5 days.",
-                P(30450.0, True, available="2026-10-22"))],
+                "Revised out-the-door total: $30,450, no add-ons. Vehicle $27,950, doc fee $449, sales tax $1,677, "
+                "title and registration $374. Valid 5 days.",
+                P(30450.0, True, available="2026-10-22", breakdown=bd(
+                    27950, [("Doc fee", 449)], [], 1677, 374, 30450, "2026-10-27")))],
             ("booking", "email"): [Response(58, "email",
                 "Confirmed at $30,450 out-the-door. Paperwork attached; we'll schedule delivery for Oct 22.",
                 P(30450.0, True, available="2026-10-22", confirms_booking=True))],
@@ -90,8 +103,10 @@ def default_dealers(job: Job) -> dict[str, SimDealer]:
                         {"role": "user", "text": "Sure, I'll email it today."},
                     )),
                 Response(50, "email",
-                    "Following up on the call: $30,690 out-the-door, all fees and tax included. Valid through Oct 31.",
-                    P(30690.0, True, available="2026-10-25")),
+                    "Following up on the call: $30,690 out-the-door. Vehicle $27,890, doc fee $389, dealer prep $495, "
+                    "sales tax $1,637, title and registration $243. Valid through Oct 31.",
+                    P(30690.0, True, available="2026-10-25", breakdown=bd(
+                        27890, [("Doc fee", 389), ("Dealer prep", 495)], [], 1637, 243, 30690, "2026-10-31"))),
             ],
             ("counter", "email"): [Response(72, "email",
                 "We can't do $29,500; $30,690 is our best. As agreed with Arjun on the phone, please confirm today and "

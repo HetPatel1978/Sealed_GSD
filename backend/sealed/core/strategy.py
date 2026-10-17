@@ -39,13 +39,14 @@ def round2(job: Job, ledger: Ledger) -> list[Decision]:
         low = ledger.lowest_firm(exclude_dealer=mine.dealer_id)
         if low is not None and low.price_total < mine.price_total:
             decisions.append(Decision(mine.dealer_id, "price_match", "price_match", round=2,
-                                      own_price=mine.price_total, cited_quote_id=low.quote_id,
+                                      own_price=mine.price_total, own_quote_id=mine.quote_id,
+                                      cited_quote_id=low.quote_id,
                                       cited_price=low.price_total, reason=(
                     f"The lowest written out-the-door total ({money(low.price_total)}) is below this dealer's "
                     f"({money(mine.price_total)}).")))
         elif job.target < mine.price_total:
             decisions.append(Decision(mine.dealer_id, "counter", "counter", round=2, offer=job.target,
-                                      own_price=mine.price_total, reason=(
+                                      own_price=mine.price_total, own_quote_id=mine.quote_id, reason=(
                     "Holds the lowest written total; the target is below it. Ask once at the target.")))
     return decisions
 

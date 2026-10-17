@@ -168,3 +168,15 @@ Call to Het's own phone (number from `SEALED_TEST_PHONE`, never logged in the re
 - Calls work from a text request with no confirmation, so the pre-send guard on the call script is the only gate before Fo dials. Keep calls behind the serial queue and Het's approval for real dealers.
 - Fo improvises at least the opening line. On dealer calls the script must stay short, and call summaries/transcripts are audited for claims beyond the script.
 - The voice conversation title contains the dialed phone number: mask it in every log.
+
+### Spike 1c: Renu's replies (watched 20:51–21:16 UTC, `spikes/watch_replies.py`)
+
+| Reply | In Gmail? | In the dealer's Fo conversation? | New Fo conversation? | Label |
+|---|---|---|---|---|
+| Reply-all (20:58 UTC): "Total price would be $5 for the mug and $5 for print. Delivery price and date would be based on location and distance. But we offer one day delivery. The price is valid for 1 week" | **Yes.** From rfb5381@psu.edu, To Het, Cc Het; `In-Reply-To` = the sent message's Message-ID; same Gmail thread (X-GM-THRID). | **No** (turn count unchanged: 2) | **No** | VERIFIED |
+| Reply only to the sender | Not received within the 25-minute window. Because Fo sent from Het's own Gmail, "the sender" is Het: such a reply would land in Het's inbox exactly like a reply-all. "Reply only to Fo" is not possible with this sending mode. | — | — | VERIFIED (not received) / ASSUMED (routing) |
+
+**Conclusions**
+- Fo's claim "replies to outreach I send arrive back in this thread" did **not** hold here: nothing appeared in the Fo conversation, and Fo created no email-channel conversation for the reply (on Oct 15, when Fo sent from fo@wajo.ai, a reply did create one, with 0 readable turns).
+- **Gmail IMAP is the read path**, and with Fo sending from the user's Gmail it is complete: replies come to the user regardless of reply-all. Threading works on `In-Reply-To` + Gmail thread id, and the subject tag survives.
+- The real reply is a good parser test case: per-item prices ("$5 for the mug and $5 for print"), no total, delivery "based on location", validity "1 week" → not an out-the-door total, `firm: false`, firm-up needed.

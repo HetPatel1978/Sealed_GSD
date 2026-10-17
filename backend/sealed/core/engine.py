@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Protocol
 
 from sealed.core import strategy
+from sealed.core.breakdown import summary as breakdown_summary
 from sealed.core.call_review import review_call
 from sealed.core.events import EventLog
 from sealed.core.guard import Guard
@@ -174,7 +175,8 @@ class Engine:
             "currency": self.job.currency, "firm": q.firm, "hedge_words": list(q.hedge_words),
             "delivery_date": q.available, "meets_deadline": q.meets_deadline, "meets_spec": q.meets_spec,
             "declined": q.declined, "suspicious_instructions": q.suspicious,
-            "numbers_grounded": inbound.parsed.numbers_grounded})
+            "numbers_grounded": inbound.parsed.numbers_grounded,
+            **({"breakdown": q.breakdown, "breakdown_flags": list(q.breakdown_flags)} if q.breakdown else {})})
         if q.price_total is not None and not q.declined:
             verified = inbound.source == "email" and (inbound.from_addr in (None, dealer.email))
             self.log.emit(now + 0.3, "quote.verified", dealer.id, {
@@ -212,7 +214,7 @@ class Engine:
         self.log.emit(now, "job.approved", p["vendor_id"], {k: p[k] for k in keys if k != "vendor_id"})
         self.state, self.winner = "BOOKING", p["vendor_id"]
         t = self._send(now + 0.5, Decision(p["vendor_id"], "propose", "booking", round=self.round,
-                                           reason="User approved the exact terms."),
+                                           own_quote_id=p["quote_id"], reason="User approved the exact terms."),
                        decided=False, approved_price=p["price_total"])
         for d in self.job.dealers:
             if d.id != self.winner and d.id in self.contacted:
@@ -284,7 +286,8 @@ class Engine:
         self.log.emit(st, "message.sent", d.dealer_id, {
             "message_id": msg.message_id, "kind": msg.kind, "round": msg.round, "channel": msg.channel,
             "to": msg.to if msg.channel == "email" else f"{self.job.dealer(d.dealer_id).name} sales line",
-            "subject": msg.subject, "body": msg.body, "offer": msg.offer, "cited_quote_id": msg.cited_quote_id})
+            "subject": msg.subject, "body": msg.body, "offer": msg.offer, "cited_quote_id": msg.cited_quote_id,
+            "numbers": messages.number_provenance(msg, self.job)})
         if d.dealer_id not in self.contacted and msg.kind == "rfq":
             self.contacted.add(d.dealer_id)
             self.log.emit(st, "vendor.contacted", d.dealer_id, {"message_id": msg.message_id, "round": msg.round})
@@ -342,6 +345,15 @@ class Engine:
                                 "delivery_date": closest.available, "flags": list(res.flags)}} if closest else {})})
             self.state = "NEEDS_HUMAN"
 
+    def fee_comparison(self) -> list[dict]:
+        """Each dealer's latest firm written quote, itemised as the dealer wrote it, lowest total first."""
+        rows = []
+        for q in sorted(self.ledger.current_firm(), key=lambda q: q.price_total):
+            rows.append({"vendor_id": q.dealer_id, "quote_id": q.quote_id, "out_the_door_total": q.price_total,
+                         **breakdown_summary(q.breakdown), "breakdown_flags": list(q.breakdown_flags),
+                         "flags": ["suspicious_instruction"] if q.dealer_id in self.flagged else []})
+        return rows
+
     def first_quote(self) -> float | None:
         firm = sorted(self.ledger.firm(), key=lambda q: q.received_at)
         return firm[0].price_total if firm else None
@@ -353,5 +365,6 @@ class Engine:
         self.log.emit(t, "job.completed", self.winner, {
             "vendor_id": self.winner, "first_quote": first, "best_quote": best, "savings_abs": s_abs,
             "savings_pct": round(100 * s_abs / first, 2), "rounds": self.round,
-            "duration_s": int(round((t - self.started_at) * 60)), "trust": dict(self.trust)})
+            "duration_s": int(round((t - self.started_at) * 60)), "trust": dict(self.trust),
+            "fee_comparison": self.fee_comparison()})
         self.state = "COMPLETED"

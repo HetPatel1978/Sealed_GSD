@@ -1,4 +1,6 @@
-# Sealed API contract (v0.2)
+# Sealed API contract (v0.3)
+
+v0.3 (2026-10-17): additive only. Optional `quote.parsed.breakdown` + `breakdown_flags`, `message.sent.numbers`, `job.completed.fee_comparison`. Shapes under "Amounts shown to the user" below. The ceiling rule is unchanged.
 
 v0.2 (2026-10-17): additive only. Optional `guard.checked.stage`, `message.sent.channel`, `quote.parsed.source`, `reply.received.source: call`; `strategy.decided.offer` is always the target or null. See `docs/plan.md` section 2.
 
@@ -187,10 +189,10 @@ Sim mode only (`404` in live mode).
 | `job.started` | null | `seed` (sim only, else null), `round: 1` |
 | `vendor.contacted` | set | `message_id`, `round` (vendor state becomes `CONTACTED`) |
 | `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Rules: `secret_checker` (yes/no only, never the value), `limit_language` (no "budget"/"max price"-style wording), `leverage_grounded`, `commitment_words`, `safety_line`; at the `fo_preview` stage also `preview_matches_ours`. No budget values ever. Optional `stage: "pre_send" | "fo_preview"` (a message can be checked twice: our text, then Fo's confirmation preview). |
-| `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body` (the exact email body we asked Fo to send), `offer` (number or null), `cited_quote_id` (price_match only). Optional `channel: "email" | "call"` (default email); for a call, `body` is the sealed call brief (goal, allowed facts, hard limits) and `subject` is null. |
+| `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body` (the exact email body we asked Fo to send), `offer` (number or null), `cited_quote_id` (price_match only). Optional `channel: "email" | "call"` (default email); for a call, `body` is the sealed call brief (goal, allowed facts, hard limits) and `subject` is null. Optional `numbers`: every number in `body` and where it came from (see below). |
 | `audit.checked` | set | `message_id`, `cc_copy_found: bool`, `matched: bool` (Fo's sent copy equals our body), `diff` (null or short text), `guard_passed: bool` (guard re-run on the actual sent copy) |
 | `reply.received` | set | `reply_id`, `in_reply_to` (message_id), `source: vendor_email | fo_relay | call` (`call` = Fo's summary of a phone call), `from`, `subject`, `text` (seller's own words, quotes/signature stripped), `evidence: {kind, ref}` |
-| `quote.parsed` | set | `reply_id`, `quote_id`, `price_total` (null if none), `price_unit`, `derived_total: bool` (total computed by code from unit x qty), `currency`, `firm: bool`, `hedge_words: []`, `delivery_date`, `meets_deadline: bool`, `meets_spec: bool`, `declined: bool`, `suspicious_instructions: bool`, `numbers_grounded: bool`. Optional `source: "email" | "call"`; a price heard on a call always has `firm: false` and is never cited to other sellers. |
+| `quote.parsed` | set | `reply_id`, `quote_id`, `price_total` (null if none), `price_unit`, `derived_total: bool` (total computed by code from unit x qty), `currency`, `firm: bool`, `hedge_words: []`, `delivery_date`, `meets_deadline: bool`, `meets_spec: bool`, `declined: bool`, `suspicious_instructions: bool`, `numbers_grounded: bool`. Optional `source: "email" | "call"`; a price heard on a call always has `firm: false` and is never cited to other sellers. Optional `breakdown` (itemised parts as the dealer wrote them) and `breakdown_flags: [breakdown_mismatch | breakdown_ungrounded]`. |
 | `quote.verified` | set | `subject_id` (quote_id or message_id for a booking), `status: VERIFIED | UNVERIFIED`, `reason`, `evidence: {kind, ref}`. VERIFIED only when the seller's own email is in the user's inbox; a Fo relay alone is UNVERIFIED. |
 | `strategy.decided` | set or null | `round`, `action: counter | price_match | firm_up | propose | needs_human`, `offer` (always the job's `target`, or null; never any other number), `cited_quote_id` + `cited_price` (price_match only), `reason` (plain text, never mentions the ceiling) |
 | `proposal.created` | set | `proposal_id`, `quote_id`, `price_total`, `currency`, `delivery_date`, `first_quote`, `savings_abs`, `savings_pct`, `flags: []` |
@@ -198,8 +200,43 @@ Sim mode only (`404` in live mode).
 | `job.approved` | set | `proposal_id`, `price_total`, `currency`, `delivery_date` (exact echoed terms) |
 | `job.rejected` | set | `proposal_id`, `reason` |
 | `job.needs_human` | set or null | `reason_code: suspicious_instruction | no_qualifying_quote | all_declined | audit_mismatch | guard_blocked | call_review | fo_refused | fo_failed | send_unclear | payment_mention | integration_down`, optional `fo_said` (Fo's own words), optional `flags: [{flag: number_outside_brief | commitment | money_topic, speaker: fo | dealer, turn, excerpt}]` (for `call_review`), `blocking: bool`, `message`, `closest` (optional `{vendor_id, price_total, delivery_date}`; never a gap to the ceiling) |
-| `job.completed` | set | `vendor_id`, `first_quote`, `best_quote`, `savings_abs`, `savings_pct`, `rounds`, `duration_s`, `trust: TrustSummary` |
+| `job.completed` | set | `vendor_id`, `first_quote`, `best_quote`, `savings_abs`, `savings_pct`, `rounds`, `duration_s`, `trust: TrustSummary`, optional `fee_comparison` (see below) |
 | `error` | set or null | `code`, `message` (user-safe), `retryable: bool`, `resent: bool` (always false for bookings) |
+
+### Amounts shown to the user (v0.3)
+
+Every field is nullable. Amounts come only from what the dealer actually wrote; each one must appear in the dealer's own text (the parser never invents numbers; code drops ungrounded ones and flags `breakdown_ungrounded`).
+
+`quote.parsed.breakdown`:
+```json
+{
+  "vehicle_price": 27890.0,
+  "dealer_fees": [{"label": "Doc fee", "amount": 389.0}, {"label": "Dealer prep", "amount": 495.0}],
+  "add_ons": [{"label": "Nitrogen-filled tires", "amount": 199.0}],
+  "taxes": 1637.0,
+  "title_registration": 243.0,
+  "other": [],
+  "out_the_door_total": 30690.0,
+  "valid_until": "2026-10-31"
+}
+```
+- Code checks that `vehicle_price + dealer_fees + add_ons + taxes + title_registration + other` equals the total within $1. If not, `breakdown_flags` includes `breakdown_mismatch`, and `price_total` stays the dealer's stated total.
+
+`message.sent.numbers`: every distinct number in `body`, with its source.
+```json
+[{"value": 30690.0, "source": "ledger", "quote_id": "q_05"},
+ {"value": 29500.0, "source": "target"},
+ {"value": 19104.0, "source": "job"}]
+```
+- `ledger`: a dealer's written quote (`quote_id` given; value equals that quote's `price_total`). `target`: the job's public target. `job`: a fact from the job spec (model year, ZIP, quantity, timeline). Nothing else can appear; the guard blocks unknown prices.
+
+`job.completed.fee_comparison`: each dealer's latest firm written quote, lowest total first.
+```json
+[{"vendor_id": "v_harbor", "quote_id": "q_09", "out_the_door_total": 30450.0, "vehicle_price": 27950.0,
+  "dealer_fees_total": 449.0, "add_ons_total": 0, "taxes": 1677.0, "title_registration": 374.0, "other_total": 0,
+  "dealer_fees": [{"label": "Doc fee", "amount": 449.0}], "add_ons": [], "breakdown_flags": [], "flags": []}]
+```
+- `flags` may include `suspicious_instruction` for a dealer flagged during the job. Category totals are `0` or null when the dealer didn't itemise.
 
 ### Definitions
 - `first_quote`: the first **firm** total price received in the job.
