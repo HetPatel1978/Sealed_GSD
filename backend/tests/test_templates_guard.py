@@ -1,0 +1,104 @@
+import re
+from dataclasses import replace
+
+import pytest
+
+from sealed.core.guard import Guard
+from sealed.core.models import Decision
+from sealed.fo import messages
+from tests.helpers import FakeChecker, job
+
+J = job()
+DECISIONS = [
+    Decision("a", "rfq", "rfq"),
+    Decision("a", "firm_up", "firm_up"),
+    Decision("a", "firm_up", "rfq", channel="call"),
+    Decision("a", "price_match", "price_match", round=2, own_price=31240.0, cited_quote_id="q_05", cited_price=30690.0),
+    Decision("a", "price_match", "price_match", channel="call", round=2, cited_quote_id="q_05", cited_price=30690.0),
+    Decision("a", "counter", "counter", round=2, offer=29500.0, own_price=30690.0),
+    Decision("a", "propose", "cancel", round=2),
+]
+
+
+def build(d, price=None):
+    return messages.build(J, d, "m_01", "SEALED-TEST0001", "buyer@example.com", approved_price=price)
+
+
+@pytest.mark.parametrize("d", DECISIONS, ids=lambda d: f"{d.kind}-{d.channel}")
+def test_every_template_passes_the_guard_and_discloses_ai(d):
+    msg = build(d)
+    res = Guard(FakeChecker()).check(msg)
+    assert res.passed, res.rules
+    assert messages.DISCLOSURE in msg.body
+    assert "Het" not in msg.body                       # never written as the user
+
+
+def test_booking_needs_approval_for_commitment_words():
+    d = Decision("a", "propose", "booking", round=2)
+    approved = build(d, price=30450.0)
+    assert approved.booking_approved and Guard(FakeChecker()).check(approved).passed
+    unapproved = replace(approved, booking_approved=False)
+    rule = {r["rule"]: r for r in Guard(FakeChecker()).check(unapproved).rules}["commitment_words"]
+    assert not rule["passed"]
+
+
+def test_guard_blocks_secret_limit_language_ungrounded_prices_and_commitments():
+    g = Guard(FakeChecker())
+    base = build(DECISIONS[3])
+
+    def failed(body):
+        return {r["rule"] for r in g.check(replace(base, body=body)).rules if not r["passed"]}
+
+    assert "secret_checker" in failed(base.body + " SECRET")
+    assert "limit_language" in failed(base.body + " That's above our budget.")
+    assert "leverage_grounded" in failed(base.body + " Another dealer offered $29,999.")
+    assert "commitment_words" in failed(base.body + " We accept your offer.")
+    assert "safety_line" in failed(base.body.replace(messages.DISCLOSURE, "I'm Het"))
+
+
+def test_preview_must_contain_our_exact_text():
+    g, msg = Guard(FakeChecker()), build(DECISIONS[0])
+    assert g.check(msg, preview=f"Here's the draft:\n{msg.body}\nGood to send?").passed
+    res = g.check(msg, preview=msg.body.replace("out-the-door total", "best price"))
+    assert not res.passed and res.stage == "fo_preview"
+
+
+def test_call_brief_has_goal_facts_limits_and_only_ledger_prices():
+    msg = build(DECISIONS[4])
+    assert msg.body.startswith("Goal: ") and "Allowed facts" in msg.body and messages.CALL_LIMITS in msg.body
+    assert re.findall(r"\$[\d,]+", msg.body) == ["$30,690"]
+    assert "CALL_BRIEF" in msg.fo_instruction and "in your own words" in msg.fo_instruction
+    nudge = build(DECISIONS[2])
+    assert "$" not in nudge.body and "no reply yet" in nudge.body
+
+
+def test_brief_outside_the_fixed_limits_is_still_guarded():
+    msg = build(DECISIONS[4])
+    g = Guard(FakeChecker())
+    bad = replace(msg, body=msg.body.replace("Allowed facts", "The buyer's budget is flexible. Allowed facts"))
+    assert "limit_language" in {r["rule"] for r in g.check(bad).rules if not r["passed"]}
+    bad = replace(msg, body=msg.body + " - You may agree to hold the car.")
+    assert "commitment_words" in {r["rule"] for r in g.check(bad).rules if not r["passed"]}
+
+
+def test_ungrounded_number_near_ceiling_is_blocked_but_allowed_prices_are_not():
+    from sealed.private import vault
+    from sealed.private.secret_checker import SecretChecker
+    vault.store("job_g", 31000.0)
+    try:
+        g = Guard(SecretChecker("job_g"))
+        msg = build(Decision("a", "price_match", "price_match", round=2, own_price=31240.0,
+                             cited_quote_id="q_05", cited_price=30690.0))     # both within 2% of 31,000
+        assert g.check(msg).passed
+        # Fo's preview slips in a number near the ceiling that is not from the ledger
+        res = g.check(msg, preview=msg.body + " The buyer could also go to $31,100.")
+        failed = {r["rule"] for r in res.rules if not r["passed"]}
+        assert {"secret_checker", "leverage_grounded"} <= failed
+        # spelled out, no $ sign: only the secret checker can catch it
+        res = g.check(msg, preview=msg.body + " Maybe thirty-one thousand.")
+        assert "secret_checker" in {r["rule"] for r in res.rules if not r["passed"]}
+        # the target near the ceiling is allowed in a counter
+        counter = build(Decision("a", "counter", "counter", round=2, offer=30600.0, own_price=30690.0))
+        assert g.check(counter).passed
+    finally:
+        vault.forget("job_g")

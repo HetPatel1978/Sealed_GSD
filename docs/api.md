@@ -1,6 +1,6 @@
 # Sealed API contract (v0.3)
 
-v0.3 (2026-10-17): the ceiling is shown back to the user through one private endpoint (`GET /jobs/{id}/ceiling`); dealer discovery (`POST /dealers/discover`, 20-mile radius); optional `zip` on jobs and `phone` / `source` on vendors. Everything else unchanged.
+v0.3 (2026-10-17): the ceiling is shown back to the user through one private endpoint (`GET /jobs/{id}/ceiling`); dealer discovery (`POST /dealers/discover`, 20-mile radius); optional `zip` on jobs and `phone` / `source` on vendors. Also additive: optional `quote.parsed.breakdown` + `breakdown_flags`, `message.sent.numbers`, `job.completed.fee_comparison` (shapes under "Amounts shown to the user" below). The ceiling rule changed: see "The one rule".
 
 v0.2 (2026-10-17): additive only. Optional `guard.checked.stage`, `message.sent.channel`, `quote.parsed.source`, `reply.received.source: call`; `strategy.decided.offer` is always the target or null. See `docs/plan.md` section 2.
 
@@ -45,18 +45,18 @@ Finds dealers for the car within a radius of the ZIP. Claude (web search + web f
 
 Request:
 ```json
-{ "item": "2026 Honda Civic Sport", "spec": { "quantity": 1, "details": "Sport trim, Sonic Gray, new" },
-  "zip": "16801", "radius_miles": 20 }
+{ "item": "2026 Honda Civic Sport", "spec": { "quantity": 1, "details": "2026 Honda Civic Sport sedan, Crystal Black Pearl, automatic" },
+  "zip": "19104", "radius_miles": 20 }
 ```
 - `radius_miles`: optional, default `20`. **v1 accepts only `20`** (`422` otherwise). `10` and `50` are enabled later, once the core flow and dashboard are built (`docs/plan.md`).
 
 Response `200`:
 ```json
 {
-  "zip": "16801", "radius_miles": 20, "mode": "live" | "sim",
+  "zip": "19104", "radius_miles": 20, "mode": "live" | "sim",
   "dealers": [
-    { "name": "Valley Honda", "email": "sales@valleyhonda.example" | null, "phone": "+1-814-555-0101" | null,
-      "website": "https://valleyhonda.example", "address": "123 College Ave, State College, PA 16801",
+    { "name": "Valley Honda", "email": "sales@valleyhonda.example" | null, "phone": "+1-215-555-0101" | null,
+      "website": "https://valleyhonda.example", "address": "3900 Chestnut St, Philadelphia, PA 19104",
       "distance_miles": 4.2, "in_stock": true | false | null,
       "source": { "kind": "discovery", "urls": ["https://valleyhonda.example/contact"] } }
   ],
@@ -79,7 +79,7 @@ Request:
   "target": 330.0,
   "ceiling": "<number, secret>",
   "max_rounds": 2,
-  "zip": "16801",
+  "zip": "19104",
   "vendors": [
     { "name": "Northstar Apparel", "email": "orders@northstar.example", "phone": null, "mode": "sim",
       "source": { "kind": "manual" } }
@@ -149,7 +149,7 @@ Response `200`: `JobView`
 ```
 
 ### GET /jobs/{id}/ceiling
-Response `200`: `{ "job_id": "job_7f3a", "ceiling": 400.0, "currency": "USD" }`, with header `Cache-Control: no-store`.
+Response `200`: `{ "job_id": "job_c41v", "ceiling": 32000.0, "currency": "USD" }`, with header `Cache-Control: no-store`.
 - The only place the ceiling is ever returned. The dashboard fetches it when it shows the job, keeps it in memory, and never puts it in a URL, `localStorage`, analytics, or any other request.
 - `404` if the job doesn't exist. Not logged (the request log records the path, never the body).
 
@@ -225,23 +225,58 @@ Sim mode only (`404` in live mode).
 
 | Type | vendor_id | `data` fields |
 |---|---|---|
-| `job.created` | null | `item`, `spec`, `deadline`, `currency`, `target`, `max_rounds`, `vendors: [{id, name, email, mode}]` |
+| `job.created` | null | `item`, `spec`, `zip` (v0.3, optional), `deadline`, `currency`, `target`, `max_rounds`, `vendors: [{id, name, email, phone, mode}]` (`phone` v0.3, optional). Never the ceiling. |
 | `job.started` | null | `seed` (sim only, else null), `round: 1` |
 | `vendor.contacted` | set | `message_id`, `round` (vendor state becomes `CONTACTED`) |
-| `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Rules: `secret_checker` (yes/no only, never the value), `leverage_grounded`, `commitment_words`, `safety_line`. No budget values ever. Optional `stage: "pre_send" | "fo_preview"` (a message can be checked twice: our text, then Fo's confirmation preview). |
-| `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body` (the exact email body we asked Fo to send), `offer` (number or null), `cited_quote_id` (price_match only). Optional `channel: "email" | "call"` (default email); for a call, `body` is the call script and `subject` is null. |
+| `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Rules: `secret_checker` (yes/no only, never the value), `limit_language` (no "budget"/"max price"-style wording), `leverage_grounded`, `commitment_words`, `safety_line`; at the `fo_preview` stage also `preview_matches_ours`. No budget values ever. Optional `stage: "pre_send" | "fo_preview"` (a message can be checked twice: our text, then Fo's confirmation preview). |
+| `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body` (the exact email body we asked Fo to send), `offer` (number or null), `cited_quote_id` (price_match only). Optional `channel: "email" | "call"` (default email); for a call, `body` is the sealed call brief (goal, allowed facts, hard limits) and `subject` is null. Optional `numbers`: every number in `body` and where it came from (see below). |
 | `audit.checked` | set | `message_id`, `cc_copy_found: bool`, `matched: bool` (Fo's sent copy equals our body), `diff` (null or short text), `guard_passed: bool` (guard re-run on the actual sent copy) |
 | `reply.received` | set | `reply_id`, `in_reply_to` (message_id), `source: vendor_email | fo_relay | call` (`call` = Fo's summary of a phone call), `from`, `subject`, `text` (seller's own words, quotes/signature stripped), `evidence: {kind, ref}` |
-| `quote.parsed` | set | `reply_id`, `quote_id`, `price_total` (null if none), `price_unit`, `derived_total: bool` (total computed by code from unit x qty), `currency`, `firm: bool`, `hedge_words: []`, `delivery_date`, `meets_deadline: bool`, `meets_spec: bool`, `declined: bool`, `suspicious_instructions: bool`, `numbers_grounded: bool`. Optional `source: "email" | "call"`; a price heard on a call always has `firm: false` and is never cited to other sellers. |
+| `quote.parsed` | set | `reply_id`, `quote_id`, `price_total` (null if none), `price_unit`, `derived_total: bool` (total computed by code from unit x qty), `currency`, `firm: bool`, `hedge_words: []`, `delivery_date`, `meets_deadline: bool`, `meets_spec: bool`, `declined: bool`, `suspicious_instructions: bool`, `numbers_grounded: bool`. Optional `source: "email" | "call"`; a price heard on a call always has `firm: false` and is never cited to other sellers. Optional `breakdown` (itemised parts as the dealer wrote them) and `breakdown_flags: [breakdown_mismatch | breakdown_ungrounded]`. |
 | `quote.verified` | set | `subject_id` (quote_id or message_id for a booking), `status: VERIFIED | UNVERIFIED`, `reason`, `evidence: {kind, ref}`. VERIFIED only when the seller's own email is in the user's inbox; a Fo relay alone is UNVERIFIED. |
 | `strategy.decided` | set or null | `round`, `action: counter | price_match | firm_up | propose | needs_human`, `offer` (always the job's `target`, or null; never any other number), `cited_quote_id` + `cited_price` (price_match only), `reason` (plain text, never mentions the ceiling) |
 | `proposal.created` | set | `proposal_id`, `quote_id`, `price_total`, `currency`, `delivery_date`, `first_quote`, `savings_abs`, `savings_pct`, `flags: []` |
 | `approval.requested` | set | `proposal_id` |
 | `job.approved` | set | `proposal_id`, `price_total`, `currency`, `delivery_date` (exact echoed terms) |
 | `job.rejected` | set | `proposal_id`, `reason` |
-| `job.needs_human` | set or null | `reason_code: suspicious_instruction | no_qualifying_quote | all_declined | audit_mismatch | integration_down`, `blocking: bool`, `message`, `closest` (optional `{vendor_id, price_total, delivery_date}`; never a gap to the ceiling) |
-| `job.completed` | set | `vendor_id`, `first_quote`, `best_quote`, `savings_abs`, `savings_pct`, `rounds`, `duration_s`, `trust: TrustSummary` |
+| `job.needs_human` | set or null | `reason_code: suspicious_instruction | no_qualifying_quote | all_declined | audit_mismatch | guard_blocked | call_review | fo_refused | fo_failed | send_unclear | payment_mention | integration_down`, optional `fo_said` (Fo's own words), optional `flags: [{flag: number_outside_brief | commitment | money_topic, speaker: fo | dealer, turn, excerpt}]` (for `call_review`), `blocking: bool`, `message`, `closest` (optional `{vendor_id, price_total, delivery_date}`; never a gap to the ceiling) |
+| `job.completed` | set | `vendor_id`, `first_quote`, `best_quote`, `savings_abs`, `savings_pct`, `rounds`, `duration_s`, `trust: TrustSummary`, optional `fee_comparison` (see below) |
 | `error` | set or null | `code`, `message` (user-safe), `retryable: bool`, `resent: bool` (always false for bookings) |
+
+### Amounts shown to the user (v0.3)
+
+Every field is nullable. Amounts come only from what the dealer actually wrote; each one must appear in the dealer's own text (the parser never invents numbers; code drops ungrounded ones and flags `breakdown_ungrounded`).
+
+`quote.parsed.breakdown`:
+```json
+{
+  "vehicle_price": 27890.0,
+  "dealer_fees": [{"label": "Doc fee", "amount": 389.0}, {"label": "Dealer prep", "amount": 495.0}],
+  "add_ons": [{"label": "Nitrogen-filled tires", "amount": 199.0}],
+  "taxes": 1637.0,
+  "title_registration": 243.0,
+  "other": [],
+  "out_the_door_total": 30690.0,
+  "valid_until": "2026-10-31"
+}
+```
+- Code checks that `vehicle_price + dealer_fees + add_ons + taxes + title_registration + other` equals the total within $1. If not, `breakdown_flags` includes `breakdown_mismatch`, and `price_total` stays the dealer's stated total.
+
+`message.sent.numbers`: every distinct number in `body`, with its source.
+```json
+[{"value": 30690.0, "source": "ledger", "quote_id": "q_05"},
+ {"value": 29500.0, "source": "target"},
+ {"value": 19104.0, "source": "job"}]
+```
+- `ledger`: a dealer's written quote (`quote_id` given; value equals that quote's `price_total`). `target`: the job's public target. `job`: a fact from the job spec (model year, ZIP, quantity, timeline). Nothing else can appear; the guard blocks unknown prices.
+
+`job.completed.fee_comparison`: each dealer's latest firm written quote, lowest total first.
+```json
+[{"vendor_id": "v_harbor", "quote_id": "q_09", "out_the_door_total": 30450.0, "vehicle_price": 27950.0,
+  "dealer_fees_total": 449.0, "add_ons_total": 0, "taxes": 1677.0, "title_registration": 374.0, "other_total": 0,
+  "dealer_fees": [{"label": "Doc fee", "amount": 449.0}], "add_ons": [], "breakdown_flags": [], "flags": []}]
+```
+- `flags` may include `suspicious_instruction` for a dealer flagged during the job. Category totals are `0` or null when the dealer didn't itemise.
 
 ### Definitions
 - `first_quote`: the first **firm** total price received in the job.
@@ -252,5 +287,5 @@ Sim mode only (`404` in live mode).
 
 ### Mock
 `mock/events.json` is one full simulated run in this exact format. `python mock/check_mock.py` validates it.
-`mock/ceiling.json` is the matching `GET /jobs/{id}/ceiling` response (a made-up value; it is not in `events.json`, and `python mock/check_mock.py --secret 400` confirms no event contains it or anything within 2%).
+`mock/ceiling.json` is the matching `GET /jobs/{id}/ceiling` response (a made-up value; it is not in `events.json`, and `python mock/check_mock.py --secret 32000` confirms no event contains it or anything within 2%).
 `mock/discovery.json` is a sample `POST /dealers/discover` response (fictional `.example` dealers).

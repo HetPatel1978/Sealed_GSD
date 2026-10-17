@@ -28,7 +28,7 @@ Status: 2026-10-17. Each entry: decision, alternatives, why. Labels as in `docs/
 - **Why:** stopping when "good enough" tells dealers where the ceiling is. Fixed rounds keep timing uninformative.
 
 ## 6. Templates in Fo's voice
-- **Decision:** all emails and scripts say "I'm Fo, an AI assistant writing/calling on behalf of [buyer]".
+- **Decision:** all emails and call briefs say "I'm Fo, an AI assistant writing/calling on behalf of [buyer]".
 - **Alternatives:** first-person text signed by the user.
 - **Why:** Fo refused to send text written as the user (spike 1b, VERIFIED). Open AI disclosure is also the honest default.
 
@@ -71,3 +71,8 @@ Status: 2026-10-17. Each entry: decision, alternatives, why. Labels as in `docs/
 - **Decision:** `POST /dealers/discover` asks Claude (web search + web fetch server tools, no other tools, no ceiling or target) for dealers of the car near the user's ZIP. Code keeps a contact detail only if it appears word for word on a fetched page, recomputes the distance from the address ZIP with an offline ZIP table, and drops dealers outside the radius. The user picks up to 5; discovery contacts no one. The radius is **20 miles** in v1; **10 and 50 miles** are added after the core flow and dashboard are built.
 - **Alternatives:** a maps/places API (e.g. Google Places) for the list plus Claude for websites; Claude web search with no distance check; contact discovered dealers automatically.
 - **Why:** no new account or key (the Anthropic key is already planned for the quote parser), less code before the freeze, and the distance check fixes web search's main weakness (no real radius). Contacting automatically would break the 5-dealer cap, the approve-every-send rule and decision 12 (real dealers only with real purchase intent). A places API can replace the search later if completeness matters.
+
+## 15. Calls use a sealed brief, not a script (supersedes the "script" part of #8)
+- **Decision:** a call gets a brief: a goal (get a WRITTEN out-the-door total, or a revised one, emailed), the only facts Fo may use (car, ZIP, timeline, buyer's first name; in round 2 the lowest written total from the ledger), and fixed hard limits (say it's an AI assistant; no agreeing, reserving, ordering or paying; no payment details; no numbers outside the brief; no follow-ups; spending/deposit questions get "The buyer is comparing written out-the-door totals"). Fo runs the conversation in its own words. The guard checks the brief before the call; a post-call review reads the voice transcript and flags numbers outside the brief, Fo commitments, and money topics → `job.needs_human`.
+- **Alternatives:** a fixed word-for-word script (spike 1d); free-form instructions.
+- **Why:** a phone call is two-way. A script breaks the moment a dealer asks a question, and Fo already improvises (spike 1d: it opened with "Hey Het! What's up?"; it says it works "from a brief, not a rigid script", CLAIMED). A brief matches how Fo actually works, while keeping what matters fixed: the facts it can state and the things it must never do. Because nothing on a call can commit the buyer or enter the ledger as firm, the remaining risk is wording, and that is caught after the call by the transcript review rather than prevented by a script Fo wouldn't follow anyway.

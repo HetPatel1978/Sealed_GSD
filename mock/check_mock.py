@@ -7,6 +7,11 @@ Checks:
      Pass it on the command line only; never write the value into the repo.
   3. Envelope shape, increasing ids, non-decreasing timestamps, every event type present, mode "sim".
   4. job.completed numbers add up.
+  5. v0.2 rules: every offer is the job's target or null; optional fields use allowed values; a price from a
+     call is never firm; a cited quote is a firm written quote from a different seller.
+  6. v0.3 rules: message.sent.numbers lists every $ amount in the body with a true source (ledger quote with
+     that price, or the target); breakdown amounts appear in the dealer's own text and their flags match the
+     arithmetic; fee_comparison rows match firm quotes.
 
 Usage:  python mock/check_mock.py [path] [--secret N]
 """
@@ -55,6 +60,83 @@ def check_number(x, path, secret):
         problems.append(f"{path}: value {x} is within 2% of the secret")
 
 
+def check_v02(events):
+    created = next((e for e in events if e["type"] == "job.created"), None)
+    target = created["data"]["target"] if created else None
+    quotes = {e["data"]["quote_id"]: e for e in events if e["type"] == "quote.parsed"}
+    allowed = {("guard.checked", "stage"): {"pre_send", "fo_preview"},
+               ("message.sent", "channel"): {"email", "call"},
+               ("quote.parsed", "source"): {"email", "call"},
+               ("reply.received", "source"): {"vendor_email", "fo_relay", "call"}}
+    for e in events:
+        d, t = e["data"], e["type"]
+        for (et, field), values in allowed.items():
+            if t == et and field in d and d[field] not in values:
+                problems.append(f"event {e['id']}: {field}={d[field]!r} not in {sorted(values)}")
+        if t in ("strategy.decided", "message.sent") and d.get("offer") not in (None, target):
+            problems.append(f"event {e['id']}: offer {d.get('offer')} is not the target ({target}) or null")
+        if t == "quote.parsed" and d.get("source") == "call" and d.get("firm"):
+            problems.append(f"event {e['id']}: a price from a call is marked firm")
+        cited = d.get("cited_quote_id") if t in ("strategy.decided", "message.sent") else None
+        if cited:
+            q = quotes.get(cited)
+            if q is None or not q["data"]["firm"] or q["data"].get("source", "email") != "email":
+                problems.append(f"event {e['id']}: cites {cited}, which is not a firm written quote")
+            elif q["vendor_id"] == e["vendor_id"]:
+                problems.append(f"event {e['id']}: cites the same seller's own quote as competition")
+            elif t == "strategy.decided" and d.get("cited_price") != q["data"]["price_total"]:
+                problems.append(f"event {e['id']}: cited_price differs from quote {cited}")
+
+
+MONEY = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?")
+
+
+def _money(text):
+    return {float(m.group(1).replace(",", "") + ("." + m.group(2) if m.group(2) else "")) for m in MONEY.finditer(text)}
+
+
+def check_v03(events):
+    created = next((e for e in events if e["type"] == "job.created"), None)
+    target = created["data"]["target"] if created else None
+    quotes = {e["data"]["quote_id"]: e["data"] for e in events if e["type"] == "quote.parsed"}
+    replies = {e["data"]["reply_id"]: e["data"]["text"] for e in events if e["type"] == "reply.received"}
+    for e in events:
+        d, t = e["data"], e["type"]
+        if t == "message.sent" and "numbers" in d:
+            listed = {n["value"] for n in d["numbers"]}
+            for v in _money(d["body"]):
+                if v not in listed:
+                    problems.append(f"event {e['id']}: ${v:,.0f} in body is not listed in numbers")
+            for n in d["numbers"]:
+                if n["source"] == "target" and n["value"] != target:
+                    problems.append(f"event {e['id']}: number {n['value']} marked target but target is {target}")
+                elif n["source"] == "ledger":
+                    q = quotes.get(n.get("quote_id"))
+                    if q is None or q["price_total"] != n["value"]:
+                        problems.append(f"event {e['id']}: number {n['value']} not equal to ledger quote {n.get('quote_id')}")
+                elif n["source"] not in ("job", "target", "ledger"):
+                    problems.append(f"event {e['id']}: number {n['value']} has source {n['source']!r}")
+        if t == "quote.parsed" and d.get("breakdown"):
+            b, text = d["breakdown"], replies.get(d["reply_id"], "")
+            amounts = [b[k] for k in ("vehicle_price", "taxes", "title_registration", "out_the_door_total") if b[k] is not None]
+            amounts += [i["amount"] for k in ("dealer_fees", "add_ons", "other") for i in b[k]]
+            in_text = _money(text)
+            for v in amounts:
+                if v not in in_text:
+                    problems.append(f"event {e['id']}: breakdown amount {v} is not in the dealer's text")
+            if b["vehicle_price"] is not None and d["price_total"] is not None:
+                parts = (b["vehicle_price"] + (b["taxes"] or 0) + (b["title_registration"] or 0)
+                         + sum(i["amount"] for k in ("dealer_fees", "add_ons", "other") for i in b[k]))
+                mismatch = abs(parts - d["price_total"]) > 1.0
+                if mismatch != ("breakdown_mismatch" in d.get("breakdown_flags", [])):
+                    problems.append(f"event {e['id']}: breakdown_mismatch flag does not match the arithmetic")
+        if t == "job.completed" and "fee_comparison" in d:
+            firm_totals = {(q["price_total"], qid) for qid, q in quotes.items() if q["firm"]}
+            for row in d["fee_comparison"]:
+                if (row["out_the_door_total"], row["quote_id"]) not in firm_totals:
+                    problems.append(f"event {e['id']}: fee_comparison row {row['quote_id']} is not a firm quote")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("path", nargs="?", default=str(Path(__file__).with_name("events.json")))
@@ -91,16 +173,20 @@ def main():
             problems.append("job.completed: savings_abs != first_quote - best_quote")
         if abs(d["savings_pct"] - round(100 * d["savings_abs"] / d["first_quote"], 2)) > 0.005:
             problems.append("job.completed: savings_pct does not match")
-        guards = sum(e["type"] == "guard.checked" for e in events)
+        pre = sum(e["type"] == "guard.checked" and e["data"].get("stage", "pre_send") == "pre_send" for e in events)
         audits = sum(e["type"] == "audit.checked" for e in events)
-        sent = sum(e["type"] == "message.sent" for e in events)
-        if d["trust"]["messages_checked_before"] != guards or guards != sent:
-            problems.append("trust: messages_checked_before != guard.checked count / message.sent count")
-        if d["trust"]["messages_checked_after"] != audits:
-            problems.append("trust: messages_checked_after != audit.checked count")
+        sent = [e for e in events if e["type"] == "message.sent"]
+        emails = sum(e["data"].get("channel", "email") == "email" for e in sent)
+        if d["trust"]["messages_checked_before"] != pre or pre != len(sent):
+            problems.append("trust: messages_checked_before != pre-send guard count / message.sent count")
+        if d["trust"]["messages_checked_after"] != audits or audits != emails:
+            problems.append("trust: messages_checked_after != audit.checked count / emails sent")
         approved = [e for e in events if e["type"] == "job.approved"]
         if not approved or approved[-1]["data"]["price_total"] != d["best_quote"]:
             problems.append("best_quote does not match the approved price")
+
+    check_v02(events)
+    check_v03(events)
 
     if problems:
         print(f"FAIL: {len(problems)} problem(s)")
