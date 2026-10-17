@@ -7,6 +7,8 @@ Checks:
      Pass it on the command line only; never write the value into the repo.
   3. Envelope shape, increasing ids, non-decreasing timestamps, every event type present, mode "sim".
   4. job.completed numbers add up.
+  5. v0.2 rules: every offer is the job's target or null; optional fields use allowed values; a price from a
+     call is never firm; a cited quote is a firm written quote from a different seller.
 
 Usage:  python mock/check_mock.py [path] [--secret N]
 """
@@ -55,6 +57,34 @@ def check_number(x, path, secret):
         problems.append(f"{path}: value {x} is within 2% of the secret")
 
 
+def check_v02(events):
+    created = next((e for e in events if e["type"] == "job.created"), None)
+    target = created["data"]["target"] if created else None
+    quotes = {e["data"]["quote_id"]: e for e in events if e["type"] == "quote.parsed"}
+    allowed = {("guard.checked", "stage"): {"pre_send", "fo_preview"},
+               ("message.sent", "channel"): {"email", "call"},
+               ("quote.parsed", "source"): {"email", "call"},
+               ("reply.received", "source"): {"vendor_email", "fo_relay", "call"}}
+    for e in events:
+        d, t = e["data"], e["type"]
+        for (et, field), values in allowed.items():
+            if t == et and field in d and d[field] not in values:
+                problems.append(f"event {e['id']}: {field}={d[field]!r} not in {sorted(values)}")
+        if t in ("strategy.decided", "message.sent") and d.get("offer") not in (None, target):
+            problems.append(f"event {e['id']}: offer {d.get('offer')} is not the target ({target}) or null")
+        if t == "quote.parsed" and d.get("source") == "call" and d.get("firm"):
+            problems.append(f"event {e['id']}: a price from a call is marked firm")
+        cited = d.get("cited_quote_id") if t in ("strategy.decided", "message.sent") else None
+        if cited:
+            q = quotes.get(cited)
+            if q is None or not q["data"]["firm"] or q["data"].get("source", "email") != "email":
+                problems.append(f"event {e['id']}: cites {cited}, which is not a firm written quote")
+            elif q["vendor_id"] == e["vendor_id"]:
+                problems.append(f"event {e['id']}: cites the same seller's own quote as competition")
+            elif t == "strategy.decided" and d.get("cited_price") != q["data"]["price_total"]:
+                problems.append(f"event {e['id']}: cited_price differs from quote {cited}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("path", nargs="?", default=str(Path(__file__).with_name("events.json")))
@@ -91,16 +121,19 @@ def main():
             problems.append("job.completed: savings_abs != first_quote - best_quote")
         if abs(d["savings_pct"] - round(100 * d["savings_abs"] / d["first_quote"], 2)) > 0.005:
             problems.append("job.completed: savings_pct does not match")
-        guards = sum(e["type"] == "guard.checked" for e in events)
+        pre = sum(e["type"] == "guard.checked" and e["data"].get("stage", "pre_send") == "pre_send" for e in events)
         audits = sum(e["type"] == "audit.checked" for e in events)
-        sent = sum(e["type"] == "message.sent" for e in events)
-        if d["trust"]["messages_checked_before"] != guards or guards != sent:
-            problems.append("trust: messages_checked_before != guard.checked count / message.sent count")
-        if d["trust"]["messages_checked_after"] != audits:
-            problems.append("trust: messages_checked_after != audit.checked count")
+        sent = [e for e in events if e["type"] == "message.sent"]
+        emails = sum(e["data"].get("channel", "email") == "email" for e in sent)
+        if d["trust"]["messages_checked_before"] != pre or pre != len(sent):
+            problems.append("trust: messages_checked_before != pre-send guard count / message.sent count")
+        if d["trust"]["messages_checked_after"] != audits or audits != emails:
+            problems.append("trust: messages_checked_after != audit.checked count / emails sent")
         approved = [e for e in events if e["type"] == "job.approved"]
         if not approved or approved[-1]["data"]["price_total"] != d["best_quote"]:
             problems.append("best_quote does not match the approved price")
+
+    check_v02(events)
 
     if problems:
         print(f"FAIL: {len(problems)} problem(s)")

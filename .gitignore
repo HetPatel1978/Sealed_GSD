@@ -38,3 +38,6 @@ Thumbs.db
 
 # Spike logs (contain conversation ids and email text)
 spikes/logs/
+
+# Local planning doc (not for the repo)
+Sealed Final Build Plan.pdf
