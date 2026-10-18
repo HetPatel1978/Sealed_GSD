@@ -4,7 +4,7 @@ v0.3 (2026-10-17): the ceiling is shown back to the user through one private end
 
 v0.2 (2026-10-17): additive only. Optional `guard.checked.stage`, `message.sent.channel`, `quote.parsed.source`, `reply.received.source: call`; `strategy.decided.offer` is always the target or null. See `docs/plan.md` section 2.
 
-Base URL (local): `http://localhost:8000`. All bodies are JSON, all timestamps ISO 8601 UTC, all money is a number in the job's `currency` (e.g. `372.0`).
+Base URL (local): `http://127.0.0.1:8000`. **Local only:** the server binds to 127.0.0.1, refuses non-loopback clients (`403 {"error": "local_only"}`) and non-local `Host` headers (`400`), and CORS allows exactly one dashboard origin (`SEALED_DASHBOARD_ORIGIN`, default `http://localhost:3000`). This matters because there is no login and `GET /jobs/{id}/ceiling` returns the ceiling. All bodies are JSON, all timestamps ISO 8601 UTC, all money is a number in the job's `currency` (e.g. `372.0`).
 
 ## The one rule
 

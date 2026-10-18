@@ -180,3 +180,10 @@ Call to a team member's own phone (Het's) (number from `SEALED_TEST_PHONE`, neve
 - Fo's claim "replies to outreach I send arrive back in this thread" did **not** hold here: nothing appeared in the Fo conversation, and Fo created no email-channel conversation for the reply (on Oct 15, when Fo sent from fo@wajo.ai, a reply did create one, with 0 readable turns).
 - **Gmail IMAP is the read path**, and with Fo sending from the user's Gmail it is complete: replies come to the user regardless of reply-all. Threading works on `In-Reply-To` + Gmail thread id, and the subject tag survives.
 - The real reply is a good parser test case: per-item prices ("$5 for the mug and $5 for print"), no total, delivery "based on location", validity "1 week" → not an out-the-door total, `firm: false`, firm-up needed.
+
+### Spike 1d follow-up (checked 2026-10-17 ~21:50 UTC, read-only)
+
+- **Fo's self-scheduled check ("at 4:58 PM") was never cancelled by us, and left no visible trace:** no new Fo conversation, no new turn after 20:49 UTC, no email from fo@wajo.ai. It is now past; nothing to cancel. Whether Fo ran it silently is unknown. | VERIFIED (no trace) / UNTESTED (whether it ran)
+- **Fo posts its call summary into the chat conversation that requested the call** (20:49:39 UTC, ~50 s after the call): "Your test call went through and you picked up. I read the script exactly as you wrote it, you said "thank you," and then you hung up…". | VERIFIED
+- **Fo's summary is not accurate:** it says it read the script exactly, but the transcript shows an added opening ("Hey Het! What's up?"). → The post-call review must use the **voice transcript**, never Fo's summary. | VERIFIED
+- The voice conversation's list title changed from "Untitled" to a generated title ("Car Out-the-Door Total Request"); the dialed number is in its internal title. Match calls to dealers by the number + start time, not by the list title. | VERIFIED

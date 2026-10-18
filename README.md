@@ -28,10 +28,12 @@ cd backend
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
-uvicorn app.main:app --reload --port 8000
+python -m app.run          # binds to 127.0.0.1:8000 only (refuses any other host)
 # http://localhost:8000/health
 pytest
 ```
+
+The API has no login (and `GET /jobs/{id}/ceiling` returns the ceiling), so it is **local only**: it binds to 127.0.0.1, refuses requests from any other machine (403) or with a non-local `Host` header (400), and CORS allows exactly one localhost dashboard origin (`SEALED_DASHBOARD_ORIGIN`, default `http://localhost:3000`). A bad setting stops startup. See `backend/app/security.py`.
 
 Credentials (Fo OAuth token, Gmail app password, Anthropic key) load from environment variables only. Copy `.env.example` to `.env` and fill it in locally. `.env` and token files are gitignored.
 

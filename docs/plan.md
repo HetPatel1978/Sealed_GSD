@@ -56,21 +56,34 @@ Status: 2026-10-17 (Saturday). Design: `docs/architecture.md` (decided). Code fr
 | — | **Decision: real dealers vs stand-ins** | — | **Sun 12:00** | |
 | 4 | Calls: round-1 nudge to non-responders, round-2 call, through the same adapter and queue; call summary → `reply.received` (source `call`) | 2 h | Sun 12:00–14:00 | One call to a team member's own phone through the adapter |
 | 5 | SSE + routes matching `docs/api.md` (incl. `GET /jobs/{id}/ceiling`); dashboard switches from mock to live | 3 h | Sun 14:00–17:00 | Dashboard shows a live sim run with target + ceiling displayed |
-| 6 | Dealer discovery: `POST /dealers/discover` (Claude + distance check, 20 mi) + dealer picker in the dashboard | 2 h | Sun 17:00–18:00 | Search for the demo car near the demo ZIP returns verified dealers within 20 miles |
+| 6 | Dealer discovery: `POST /dealers/discover` (option A Claude or option B Fo, see below; code check + distance check, 20 mi) + dealer picker in the dashboard | 2 h | Sun 17:00–18:00 | Search for the demo car near the demo ZIP returns verified dealers within 20 miles |
 | — | End-to-end run, README, tests green, freeze | 1 h | Sun 18:00–19:00 | Freeze |
 | later | Radius options 10 / 50 miles (API + dashboard selector), only after the core flow and dashboard are built | 0.5 h | after freeze | `radius_miles` accepts 10, 20, 50 |
 | — | Demo video + X post draft | — | Sun night | Posted by Mon 10:15 ET |
 
 The dashboard can be built against the mock (`events.json`, `ceiling.json`, `discovery.json`) from step 0 onward; SSE wiring lands in step 5.
 
+### Step 6 options: who finds the dealers (not built yet; choose before step 6)
+
+Both options end in the same code checks, and neither ever gets the ceiling or the target.
+
+| | Option A: Claude (decision 14) | Option B: Fo |
+|---|---|---|
+| How | Claude Messages API with `web_search` + `web_fetch` server tools, structured output: dealers of the exact car near the ZIP, with name, website, sales email, phone, address and the pages each came from. | One `ask_fo` turn in a **new** conversation: "Find franchise dealers for [exact car] within 20 miles of ZIP [zip]. For each, give the name, website URL, sales email and phone. Don't contact anyone." Fo returns free text; code extracts the fields. |
+| Code check | Each email / phone / address must appear word for word in the page text from Claude's own `web_fetch` results; distance from the address ZIP with an offline ZIP table (`pgeocode`); drop outside 20 mi. | **Code fetches each URL itself** (plain HTTP GET, read-only) and keeps an email / phone / address only if it appears word for word on that page; same distance check; drop outside 20 mi. |
+| Pros | Structured output; the page text comes back in the same response; one API key we already plan for the parser. | Uses Fo (the hackathon's tool); no extra prompt engineering for tools; Fo may know local dealers well. |
+| Cons / risks | Web search has no real radius (the distance check fixes that). | Free text (needs parsing); slower (~20–50 s per turn, serial queue shared with sends); Fo might act beyond "find" (the prompt says contact no one, and the turn is checked like any other: a reply that suggests it contacted someone raises `needs_human`); Fo remembers across conversations, so the request must contain only the car and ZIP. Our own fetcher must handle robots/blocked pages and never submit forms. |
+| Status | Planned (decision 14). | Option, not built. |
+
 ## 4. Cut list (in cut order)
 
 1. **Dealer discovery** → the user types dealers in by hand (the existing `POST /jobs` path).
 2. **Live dealer round** → fall back to stand-in dealers (labelled on screen).
-3. **Gmail post-send audit** → keep the audit via `get_fo_conversation` (our turn + Fo's confirmation text).
-4. **Round-2 calls** → keep the round-1 call nudge.
+3. **Round-2 calls** → keep the round-1 call nudge.
 
-Never cut: ceiling isolation (qualifier only inside the backend; never in events, Fo or LLMs), pre-send guard, written-quotes-only rule, approval gate, live/sim labels.
+The **Gmail post-send audit is not on the cut list**: spike 1c showed Fo sends without a preview and its conversation doesn't contain the sent email, so the CC copy in Gmail is the only check of what Fo actually sent.
+
+Never cut: ceiling isolation (qualifier only inside the backend; never in events, Fo or LLMs), local-only API (loopback bind, one localhost CORS origin), Gmail post-send audit, pre-send guard, written-quotes-only rule, approval gate, live/sim labels.
 
 ## 5. Demo checklist
 
