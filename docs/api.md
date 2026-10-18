@@ -88,7 +88,7 @@ Request:
 ```
 - `ceiling`: required, must be `> target`. Stored in the private zone only; shown back only by `GET /jobs/{id}/ceiling`.
 - `max_rounds`: default 2. `vendors`: 1-5 entries; `mode` is `"live"` or `"sim"`.
-- Optional (v0.3): `zip`; per vendor `phone` (needed for calls) and `source` (`{ "kind": "manual" }` if typed in, or the `source` object from `POST /dealers/discover`). Each vendor needs an `email` or a `phone` (`422` otherwise). A phone-only vendor (`email: null`) gets the round-1 request as a call asking it to email the buyer; after its first written reply, later emails go to the address that reply came from. A phone-only vendor that never writes gets no email (and so no decline).
+- Optional (v0.3): `zip`; per vendor `phone` (needed for calls) and `source` (`{ "kind": "manual" }` if typed in, or the `source` object from `POST /dealers/discover`). Each vendor needs an `email` or a `phone` (`422` otherwise). A phone-only vendor (`email: null`) gets the round-1 request as a call asking it to email the buyer; later emails use the first sender that trusted ingestion attributes to that dealer's call. An unknown sender alone never establishes identity. A phone-only vendor with no attributed reply gets no email (and so no decline).
 
 Response `201`: a `JobView` (below). Errors: `422` validation (the message never echoes the ceiling value).
 
@@ -176,6 +176,8 @@ The body must echo the exact terms the user saw. If anything differs from the cu
 ```
 Response `200`: `JobView` (state `BOOKING`). `409`: `{ "error": "stale_proposal", "current_proposal": ProposalView | null }`.
 
+A sender-matched written update from the proposed dealer supersedes its old terms and invalidates the old proposal ID. A booking completes only after the dealer's sender-matched email is linked to the sent booking and confirms the exact approved amount, currency, specification and delivery date. A mismatch pauses the job with `reason_code: "booking_mismatch"`; a blocked or altered booking also pauses before other dealers receive declines.
+
 ### POST /jobs/{id}/reject
 `{ "proposal_id": "p_01", "reason": "optional free text" }` → `200` `JobView`. `409` if stale.
 
@@ -229,7 +231,7 @@ Sim mode only (`404` in live mode).
 | `job.created` | null | `item`, `spec`, `zip` (v0.3, optional), `deadline`, `currency`, `target`, `max_rounds`, `vendors: [{id, name, email, phone, mode}]` (`phone` v0.3, optional). Never the ceiling. |
 | `job.started` | null | `seed` (sim only, else null), `round: 1` |
 | `vendor.contacted` | set | `message_id`, `round` (vendor state becomes `CONTACTED`) |
-| `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Rules: `secret_checker` (yes/no only, never the value), `limit_language` (no "budget"/"max price"-style wording), `leverage_grounded`, `commitment_words`, `safety_line`; at the `fo_preview` stage also `preview_matches_ours`. No budget values ever. Optional `stage: "pre_send" | "fo_preview"` (a message can be checked twice: our text, then Fo's confirmation preview). |
+| `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Rules: `secret_checker` (yes/no only, never the value; scans the full outgoing payload), `limit_language` (no "budget"/"max price"-style wording), `leverage_grounded`, `commitment_words`, `safety_line`, `payload_integrity` (headers and instruction wrapper match our payload; no header or marker injection); at the `fo_preview` stage also `preview_matches_ours` (exact payload, allowing only known confirmation wrappers). No budget values ever. Optional `stage: "pre_send" | "fo_preview"` (a message can be checked twice: our text, then Fo's confirmation preview). |
 | `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body` (the exact email body we asked Fo to send), `offer` (number or null), `cited_quote_id` (price_match only). Optional `channel: "email" | "call"` (default email); for a call, `body` is the sealed call brief (goal, allowed facts, hard limits) and `subject` is null. Optional `numbers`: every number in `body` and where it came from (see below). |
 | `audit.checked` | set | `message_id`, `cc_copy_found: bool`, `matched: bool` (Fo's sent copy equals our body), `diff` (null or short text), `guard_passed: bool` (guard re-run on the actual sent copy) |
 | `reply.received` | set | `reply_id`, `in_reply_to` (message_id), `source: vendor_email | fo_relay | call` (`call` = Fo's summary of a phone call), `from`, `subject`, `text` (seller's own words, quotes/signature stripped), `evidence: {kind, ref}` |
@@ -240,7 +242,7 @@ Sim mode only (`404` in live mode).
 | `approval.requested` | set | `proposal_id` |
 | `job.approved` | set | `proposal_id`, `price_total`, `currency`, `delivery_date` (exact echoed terms) |
 | `job.rejected` | set | `proposal_id`, `reason` |
-| `job.needs_human` | set or null | `reason_code: suspicious_instruction | no_qualifying_quote | all_declined | audit_mismatch | guard_blocked | call_review | fo_refused | fo_failed | send_unclear | payment_mention | integration_down`, optional `fo_said` (Fo's own words), optional `flags: [{flag: number_outside_brief | commitment | money_topic, speaker: fo | dealer, turn, excerpt}]` (for `call_review`), `blocking: bool`, `message`, `closest` (optional `{vendor_id, price_total, delivery_date}`; never a gap to the ceiling) |
+| `job.needs_human` | set or null | `reason_code: suspicious_instruction | no_qualifying_quote | all_declined | audit_mismatch | guard_blocked | booking_mismatch | call_review | fo_refused | fo_failed | send_unclear | payment_mention | integration_down`, optional `fo_said` (Fo's own words), optional `flags: [{flag: number_outside_brief | commitment | money_topic, speaker: fo | dealer, turn, excerpt}]` (for `call_review`), `blocking: bool`, `message`, `closest` (optional `{vendor_id, price_total, delivery_date}`; never a gap to the ceiling) |
 | `job.completed` | set | `vendor_id`, `first_quote`, `best_quote`, `savings_abs`, `savings_pct`, `rounds`, `duration_s`, `trust: TrustSummary`, optional `fee_comparison` (see below) |
 | `error` | set or null | `code`, `message` (user-safe), `retryable: bool`, `resent: bool` (always false for bookings) |
 
@@ -280,6 +282,7 @@ Every field is nullable. Amounts come only from what the dealer actually wrote; 
 - `flags` may include `suspicious_instruction` for a dealer flagged during the job. Category totals are `0` or null when the dealer didn't itemise.
 
 ### Definitions
+- Firm quotes require a matching configured dealer sender, a finite positive total grounded in the dealer's actual text, the job's currency and specification, and no hedge or decline. Only each dealer's latest sender-matched written reply is current for strategy and qualification; a withdrawal or non-firm revision retires older offers. History stays available as evidence and for the first-quote baseline. Calls and unmatched senders never supersede a verified written offer.
 - `first_quote`: the first **firm** total price received in the job.
 - `best_quote`: the approved price.
 - `savings_abs = first_quote - best_quote`, `savings_pct = round(100 * savings_abs / first_quote, 2)`.

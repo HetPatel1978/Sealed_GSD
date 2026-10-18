@@ -9,11 +9,13 @@ from sealed.core.models import Decision, Job, Quote
 
 
 def money(x: float) -> str:
-    return f"${x:,.0f}"
+    return f"${x:,.2f}".removesuffix(".00")
 
 
 def after_reply(quote: Quote, firm_up_sent: bool, already_flagged: bool) -> Decision | None:
     """Reaction to one written reply in any round."""
+    if quote.source == "email" and not quote.verified:
+        return None
     if quote.suspicious and not already_flagged:
         return Decision(quote.dealer_id, "needs_human", "none", reason=(
             "Reply contains an instruction or claim Sealed did not make (e.g. an agreement or payment request). "
@@ -57,7 +59,8 @@ def round2_calls(job: Job, ledger: Ledger, price_match_sent: dict[str, float], r
     out = []
     for dealer_id, sent_at in price_match_sent.items():
         d = job.dealer(dealer_id)
-        if dealer_id in called or not d.phone or replied_after.get(dealer_id, -1) > sent_at:
+        if (dealer_id in called or not d.phone or replied_after.get(dealer_id, -1) > sent_at
+                or ledger.latest_firm(dealer_id) is None):
             continue
         low = ledger.lowest_firm(exclude_dealer=dealer_id)
         if low is None:

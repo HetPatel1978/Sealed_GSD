@@ -10,6 +10,7 @@ credentials*.json
 token*.json
 
 # Local data
+.sealed/
 *.db
 *.sqlite
 *.sqlite3

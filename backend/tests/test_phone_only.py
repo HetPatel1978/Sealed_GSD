@@ -2,9 +2,11 @@ from dataclasses import replace
 
 import pytest
 
-from sealed.core.models import Dealer, ParsedReply
+from sealed.core.engine import Engine, SendResult
+from sealed.core.models import Dealer, Inbound, ParsedReply
 from sealed.sim.dealers import Response, SimDealer
 from sealed.sim.run import default_dealers, default_job, run
+from tests.helpers import FakeChecker
 
 PENN_ADDR = "sales@penn-motors.example"
 
@@ -28,7 +30,7 @@ def _run_with_phone_only_dealers():
     sims = default_dealers(job) | {
         "v_penn": SimDealer(penn, {("rfq", "call"): [Response(
             40, "email", "Out-the-door total for the Civic Sport is $32,900 including all fees and taxes.",
-            ParsedReply(32900.0, True, available="2026-10-25"), from_addr=PENN_ADDR)]}),
+            ParsedReply(32900.0, True, available="2026-10-25"), from_addr=PENN_ADDR, contact_verified=True)]}),
         "v_quiet": SimDealer(quiet, {}),
     }
     return run(job=job, dealers=sims)
@@ -68,3 +70,52 @@ def test_job_created_lists_phone_only_dealers_with_their_source():
     assert vendors["v_penn"]["email"] is None and vendors["v_penn"]["phone"]
     assert vendors["v_penn"]["source"] == {"kind": "discovery", "urls": ["https://penn-motors.example/contact"]}
     assert vendors["v_northline"]["source"] == {"kind": "manual"}
+
+
+@pytest.fixture
+def phone_engine():
+    class Transport:
+        def send(self, now, msg, approve_preview):
+            return SendResult(True, now, sent_copy=msg.body if msg.channel == "email" else None)
+
+    job = replace(default_job(), dealers=(Dealer("p", "Penn Motors", None, "+1-555-0198"),
+                                         Dealer("q", "Quiet Auto", None, "+1-555-0197")))
+    eng = Engine(job, Transport(), FakeChecker(), qualifier=None, cc="buyer@example.com", tag="PHONE-TEST")
+    eng.start(0)
+    return eng
+
+
+def _reply(eng, **changes):
+    call = next(m for m in eng.outbound.values() if m.dealer_id == "p")
+    reply = Inbound("p", "email", "Out-the-door total: $32,900.",
+                    ParsedReply(32900, True, available="2026-10-25"),
+                    in_reply_to=call.message_id, from_addr=PENN_ADDR, contact_verified=True)
+    return replace(reply, **changes)
+
+
+@pytest.mark.parametrize("changes", [
+    {"contact_verified": False}, {"in_reply_to": None}, {"in_reply_to": "unrelated"}, {"from_addr": None},
+])
+def test_unknown_senders_need_trusted_attribution_and_a_link_to_the_call(phone_engine, changes):
+    eng = phone_engine
+    eng.on_inbound(10, _reply(eng, **changes))
+    assert eng.email_to("p") is None
+    assert not eng.ledger.current_firm()
+    assert eng.log.of_type("quote.verified")[-1]["data"]["status"] == "UNVERIFIED"
+
+
+def test_reply_linked_to_another_dealers_call_cannot_register_an_address(phone_engine):
+    eng = phone_engine
+    other = next(m for m in eng.outbound.values() if m.dealer_id == "q")
+    eng.on_inbound(10, _reply(eng, in_reply_to=other.message_id))
+    assert eng.email_to("p") is None and not eng.ledger.current_firm()
+
+
+def test_attributed_sender_is_learned_once_and_cannot_be_replaced_by_a_later_sender(phone_engine):
+    eng = phone_engine
+    eng.on_inbound(10, _reply(eng))
+    original = eng.ledger.latest_firm("p")
+    assert eng.email_to("p") == PENN_ADDR and original is not None
+    eng.on_inbound(11, _reply(eng, from_addr="attacker@example.com"))
+    assert eng.email_to("p") == PENN_ADDR and eng.ledger.latest_firm("p") == original
+    assert eng.log.of_type("quote.verified")[-1]["data"]["status"] == "UNVERIFIED"

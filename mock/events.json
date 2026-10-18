@@ -99,6 +99,10 @@
         {
           "rule": "safety_line",
           "passed": true
+        },
+        {
+          "rule": "payload_integrity",
+          "passed": true
         }
       ]
     }
@@ -136,6 +140,10 @@
         },
         {
           "rule": "safety_line",
+          "passed": true
+        },
+        {
+          "rule": "payload_integrity",
           "passed": true
         },
         {
@@ -246,6 +254,10 @@
         {
           "rule": "safety_line",
           "passed": true
+        },
+        {
+          "rule": "payload_integrity",
+          "passed": true
         }
       ]
     }
@@ -283,6 +295,10 @@
         },
         {
           "rule": "safety_line",
+          "passed": true
+        },
+        {
+          "rule": "payload_integrity",
           "passed": true
         },
         {
@@ -408,6 +424,10 @@
         {
           "rule": "safety_line",
           "passed": true
+        },
+        {
+          "rule": "payload_integrity",
+          "passed": true
         }
       ]
     }
@@ -445,6 +465,10 @@
         },
         {
           "rule": "safety_line",
+          "passed": true
+        },
+        {
+          "rule": "payload_integrity",
           "passed": true
         },
         {
@@ -720,6 +744,10 @@
         {
           "rule": "safety_line",
           "passed": true
+        },
+        {
+          "rule": "payload_integrity",
+          "passed": true
         }
       ]
     }
@@ -815,6 +843,10 @@
         },
         {
           "rule": "safety_line",
+          "passed": true
+        },
+        {
+          "rule": "payload_integrity",
           "passed": true
         }
       ]
@@ -1168,6 +1200,10 @@
         {
           "rule": "safety_line",
           "passed": true
+        },
+        {
+          "rule": "payload_integrity",
+          "passed": true
         }
       ]
     }
@@ -1272,6 +1308,10 @@
         {
           "rule": "safety_line",
           "passed": true
+        },
+        {
+          "rule": "payload_integrity",
+          "passed": true
         }
       ]
     }
@@ -1372,6 +1412,10 @@
         },
         {
           "rule": "safety_line",
+          "passed": true
+        },
+        {
+          "rule": "payload_integrity",
           "passed": true
         }
       ]
@@ -1635,6 +1679,10 @@
         },
         {
           "rule": "safety_line",
+          "passed": true
+        },
+        {
+          "rule": "payload_integrity",
           "passed": true
         }
       ]
@@ -1985,6 +2033,10 @@
         {
           "rule": "safety_line",
           "passed": true
+        },
+        {
+          "rule": "payload_integrity",
+          "passed": true
         }
       ]
     }
@@ -2023,6 +2075,10 @@
         },
         {
           "rule": "safety_line",
+          "passed": true
+        },
+        {
+          "rule": "payload_integrity",
           "passed": true
         },
         {
@@ -2113,6 +2169,10 @@
         {
           "rule": "safety_line",
           "passed": true
+        },
+        {
+          "rule": "payload_integrity",
+          "passed": true
         }
       ]
     }
@@ -2187,6 +2247,10 @@
         },
         {
           "rule": "safety_line",
+          "passed": true
+        },
+        {
+          "rule": "payload_integrity",
           "passed": true
         }
       ]

@@ -1,4 +1,5 @@
 from sealed.core.models import Dealer, Inbound, Job, ParsedReply
+from sealed.core.ledger import Ledger
 
 
 class FakeChecker:
@@ -17,7 +18,15 @@ def job(target: float = 29500.0) -> Job:
 
 
 def email(dealer: str, price: float | None, otd: bool = True, **kw) -> Inbound:
-    return Inbound(dealer, "email", "text", ParsedReply(price, otd, available=kw.pop("available", "2026-10-25"), **kw))
+    text = f"Out-the-door total: ${price:,.2f}." if price is not None else "No quote available."
+    return Inbound(dealer, "email", text,
+                   ParsedReply(price, otd, available=kw.pop("available", "2026-10-25"), **kw),
+                   from_addr=f"{dealer}@x.example")
+
+
+def ledger() -> Ledger:
+    j = job()
+    return Ledger(j.deadline, {d.id: d.email for d in j.dealers}, j.currency)
 
 
 def call(dealer: str, price: float) -> Inbound:

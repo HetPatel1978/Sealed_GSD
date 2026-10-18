@@ -5,12 +5,14 @@ by the `GET /jobs/{id}/ceiling` route so the user can see the ceiling they set (
 Never log the value, and never put it in an event, a message, a Fo request or an LLM prompt.
 """
 
+from math import isfinite
+
 _ceilings: dict[str, float] = {}
 
 
 def store(job_id: str, ceiling: float) -> None:
-    if ceiling <= 0:
-        raise ValueError("ceiling must be positive")
+    if not isfinite(ceiling) or ceiling <= 0:
+        raise ValueError("ceiling must be finite and positive")
     _ceilings[job_id] = float(ceiling)
 
 

@@ -22,6 +22,8 @@ Calls are a core channel with two jobs: nudge silent dealers to send a written q
 
 The secret checker and pre-/post-send checks stay as defence in depth.
 
+Step 1 validation rules: a firm quote needs a matching configured dealer sender, a finite positive total present in the dealer's text, the job's currency and specification, and no hedge or decline. Strategy and qualification use only the latest sender-matched written reply per dealer, so a withdrawal or non-firm revision retires an older offer. Historical quotes remain available for evidence and the first-quote savings baseline. A dealer update invalidates its pending proposal; booking completion requires a confirmation linked to the sent booking with the exact approved terms. The guard scans the full outgoing payload, checks the instruction wrapper and headers, and rejects previews containing added text beyond known confirmation wrappers.
+
 ## 2. System diagram
 
 ```mermaid
@@ -111,7 +113,7 @@ flowchart TB
 | Round | Who | Channel | Message kind | Content |
 |---|---|---|---|---|
 | 1 | every dealer with an email | email | `rfq` | Exact car (model, trim, color), zip, timeline, ask for a written **out-the-door** total. |
-| 1 | phone-only dealers (no email on file) | **call** | `rfq` | "I'm Fo, calling for a buyer about [exact car]. Could you email the out-the-door total to [buyer's address]?" Counts as their call nudge. Later emails go to the address their first written reply came from. |
+| 1 | phone-only dealers (no email on file) | **call** | `rfq` | "I'm Fo, calling for a buyer about [exact car]. Could you email the out-the-door total to [buyer's address]?" Counts as their call nudge. Later emails go to the first sender that trusted ingestion attributes to this dealer's call. An unknown sender alone never establishes identity. |
 | 1 | dealers with no email reply after a fixed wait (e.g. 3 h, set at job creation) | **call** | `rfq` (call nudge) | Sealed brief. Goal: get a written out-the-door total emailed. Facts: car, ZIP, timeline, buyer's first name, "we emailed and have no reply yet". Once per dealer. |
 | 1b | dealers whose written reply is not firm | email | `firm_up` | "Please send the out-the-door total including all fees and taxes." Once. |
 | 2 | every dealer with a firm quote that is not the lowest | email | `price_match` | "Your total is $X. The lowest written out-the-door total so far is $Y. Would you like to revise?" |
@@ -182,6 +184,8 @@ sequenceDiagram
 - **Replies.** Gmail IMAP is the source of truth for written replies: `get_fo_conversation` on the email-channel conversation created by a vendor reply returned **0 turns** (VERIFIED twice). Fo CLAIMS replies "arrive back in this thread"; spike 1c watches the per-dealer conversation to test that. If it holds, it becomes a second read path, not a replacement.
 - **Webhook.** A `conversation.reply` webhook is DOCUMENTED in the separate Wajo agent MCP (`https://mcp.api.wajo.ai/mcp`, `register_webhook`), needs a public HTTPS URL, and carries Fo's final message (max 2,000 chars), not the dealer's raw email. Not used; polling stays.
 - **Token.** `auth.py` refreshes before expiry; refresh tokens rotate and are saved immediately.
+
+Adapter implementation details: run one process with one persistent state file per account. Its account lock covers reservation, the whole Fo turn and final status; state is reloaded inside the lock and written by atomic replacement. Message keys include job/run/message and a payload fingerprint; conversation keys include job/run/dealer. IDs learned during polling are saved before answering a preview. Unresolved or flagged turns leave a persistent active marker requiring review. A single async owner task creates, uses, reconnects and closes the MCP session, so token rotation preserves SDK context ownership. Controlled live acceptance instructions are in `docs/fo_adapter.md`; Gmail sent-copy auditing remains part of step 3.
 
 ## 8. Changes vs the earlier design and API
 

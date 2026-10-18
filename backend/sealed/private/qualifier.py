@@ -7,6 +7,7 @@ qualifies; the flag is shown on the proposal either way.
 
 from dataclasses import dataclass
 
+from sealed.core.ledger import latest_written
 from sealed.core.models import Quote
 from sealed.private import vault
 
@@ -23,11 +24,12 @@ class QualifierResult:
 def qualify(job_id: str, quotes: list[Quote], flagged_dealers: set[str], exclude_quote_ids: set[str] = frozenset()
             ) -> QualifierResult:
     ceiling = vault._read(job_id)
-    usable = [q for q in quotes
-              if q.firm and q.source == "email" and q.meets_spec and q.meets_deadline is not False
+    current = latest_written(quotes)
+    usable = [q for q in current
+              if q.firm and q.numbers_grounded and q.source == "email" and q.meets_spec and q.meets_deadline is not False
               and not q.declined and q.price_total is not None and q.quote_id not in exclude_quote_ids]
     if not usable:
-        return QualifierResult("needs_human", reason_code="all_declined" if quotes and all(q.declined for q in quotes)
+        return QualifierResult("needs_human", reason_code="all_declined" if current and all(q.declined for q in current)
                                else "no_qualifying_quote", reason="No firm written out-the-door quote to propose.")
 
     def rank(q: Quote):

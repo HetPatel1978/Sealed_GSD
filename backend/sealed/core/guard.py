@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from sealed.core.models import Outbound
-from sealed.fo.messages import DISCLOSURE, SAFETY_PHRASES
+from sealed.fo.messages import DISCLOSURE, SAFETY_PHRASES, wrap_call_for_fo, wrap_for_fo
 
 BUDGET_WORDS = re.compile(r"\b(budget|ceiling|max(imum)?\s+(price|budget)|afford|price\s+limit|walk[- ]?away|"
                           r"most\s+(we|he|she|they|i)\s+(can|could|will|would)\s+pay|top\s+dollar)\b", re.I)
@@ -46,6 +46,39 @@ def mask_allowed(text: str, allowed: frozenset[float]) -> str:
     return MONEY.sub(sub, text)
 
 
+def preview_matches(msg: Outbound, preview: str) -> bool:
+    """Accept the exact payload with a small set of known confirmation wrappers.
+
+    Arbitrary text before/after the body is never approved. If headers are shown, they must match too.
+    An unfamiliar wrapper pauses sending rather than asking an LLM to interpret it.
+    """
+    prefixes = ("", "Here's the draft: ", "Here is the draft: ",
+                f"Here's what I'll send to {msg.dealer_name}: ")
+    suffixes = ("", " Good to send?", " Should I send it?", " Shall I send it?",
+                " Ready to send?", " Okay to send?", " OK to send?")
+    if msg.channel == "call":
+        prefixes = ("", "Here's the call brief: ", "Here is the call brief: ")
+        suffixes = ("", " Good to call?", " Shall I place the call?", " Okay to call?")
+    bodies = [msg.body]
+    if msg.channel == "email":
+        bodies.append(f"To: {msg.to}\nCC: {msg.cc}\nSubject: {msg.subject}\nBody: {msg.body}")
+    return _squash(preview) in {_squash(p + body + s) for p in prefixes for body in bodies for s in suffixes}
+
+
+def payload_intact(msg: Outbound) -> bool:
+    headers = (msg.to, msg.cc, msg.subject or "", msg.dealer_name)
+    if any("\r" in v or "\n" in v for v in headers):
+        return False
+    if any(marker in v for v in (*headers, msg.body)
+           for marker in ("<<<EMAIL_BODY", "EMAIL_BODY>>>", "<<<CALL_BRIEF", "CALL_BRIEF>>>")):
+        return False
+    if msg.channel == "email":
+        return _squash(msg.fo_instruction) == _squash(wrap_for_fo(msg.to, msg.cc, msg.subject or "", msg.body))
+    if msg.channel == "call":
+        return _squash(msg.fo_instruction) == _squash(wrap_call_for_fo(msg.dealer_name, msg.to, msg.body))
+    return False
+
+
 class Guard:
     def __init__(self, checker: Checker):
         self._checker = checker
@@ -53,18 +86,24 @@ class Guard:
     def check(self, msg: Outbound, preview: str | None = None) -> GuardResult:
         stage = "fo_preview" if preview is not None else "pre_send"
         text = preview if preview is not None else msg.body
+        # Fo receives headers and instructions as well as the body. Check all of them for secrets/prices.
+        payload = "\n".join((msg.to, msg.cc, msg.subject or "", msg.body, msg.fo_instruction, preview or ""))
         rules = []
 
         # Allowed prices (ledger quotes, the target, the approved price) are true and reveal nothing, even near
         # the ceiling; blocking them would make our behaviour depend on the ceiling. Mask them, check the rest.
         rules.append({"rule": "secret_checker",
-                      "passed": not self._checker.contains_secret(mask_allowed(text, msg.allowed_prices))})
-        scrubbed = text
+                      "passed": not self._checker.contains_secret(mask_allowed(payload, msg.allowed_prices))})
+        scrubbed = "\n".join((text, msg.subject or ""))
+        # Mailbox names such as orders@... are routing metadata, not commitment wording.
+        for address in (msg.to, msg.cc):
+            if address:
+                scrubbed = scrubbed.replace(address, "[address]")
         for phrase in SAFETY_PHRASES:       # fixed safety text (incl. call hard limits) says what we WON'T do
             scrubbed = scrubbed.replace(phrase, "")
         rules.append({"rule": "limit_language", "passed": not BUDGET_WORDS.search(scrubbed)})
 
-        unknown = [v for v in money_values(text) if v not in msg.allowed_prices]
+        unknown = {v for v in money_values(payload) if v not in msg.allowed_prices}
         grounded = {"rule": "leverage_grounded", "passed": not unknown}
         if unknown:
             grounded["detail"] = f"{len(unknown)} price(s) not from the ledger or the target"
@@ -81,8 +120,9 @@ class Guard:
         rules.append(commit_rule)
 
         rules.append({"rule": "safety_line", "passed": DISCLOSURE in text})
+        rules.append({"rule": "payload_integrity", "passed": payload_intact(msg)})
 
         if preview is not None:
-            rules.append({"rule": "preview_matches_ours", "passed": _squash(msg.body) in _squash(preview)})
+            rules.append({"rule": "preview_matches_ours", "passed": preview_matches(msg, preview)})
 
         return GuardResult(all(r["passed"] for r in rules), stage, rules)

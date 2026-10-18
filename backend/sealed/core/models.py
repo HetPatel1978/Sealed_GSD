@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class Dealer:
     """A dealer needs an email, a phone, or both. Phone-only dealers get the round-1 request as a call and are
-    emailed later only at the address their first written reply came from."""
+    emailed later only at an address attributed to their call by trusted ingestion."""
     id: str
     name: str
     email: str | None
@@ -55,6 +55,7 @@ class ParsedReply:
     confirms_booking: bool = False
     numbers_grounded: bool = True
     breakdown: dict | None = None     # itemised parts as the dealer wrote them (see sealed.core.breakdown)
+    currency: str = "USD"
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,8 @@ class Inbound:
     in_reply_to: str | None = None
     from_addr: str | None = None
     turns: tuple[dict, ...] = ()      # call transcript turns ({"role": "assistant"|"user", "text": ...})
+    contact_verified: bool = False    # trusted ingestion confirmed this sender belongs to a phone-only dealer;
+                                      # never supplied by the quote parser
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,8 @@ class Quote:
     received_at: float
     breakdown: dict | None = None
     breakdown_flags: tuple[str, ...] = ()
+    verified: bool = False            # sender matches this job's configured dealer address
+    numbers_grounded: bool = False   # code checked the total against the dealer's text
 
 
 @dataclass(frozen=True)
@@ -121,3 +126,7 @@ class Outbound:
     booking_approved: bool = False
     # (value, source, quote_id): source is "ledger" or "target"; every price the message may state
     price_sources: tuple[tuple[float, str, str | None], ...] = ()
+    cc: str = ""
+    dealer_name: str = ""
+    job_id: str = ""
+    run_id: str = ""

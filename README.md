@@ -37,6 +37,10 @@ The API has no login (and `GET /jobs/{id}/ceiling` returns the ceiling), so it i
 
 Credentials (Fo OAuth token, Gmail app password, Anthropic key) load from environment variables only. Copy `.env.example` to `.env` and fill it in locally. `.env` and token files are gitignored.
 
+The Fo adapter's local checks and controlled live email test are documented in [docs/fo_adapter.md](docs/fo_adapter.md). The smoke command is a dry run by default; its state lives in gitignored `.sealed/`.
+
+Read-only Gmail reply staging is available separately; see [docs/gmail_ingestion.md](docs/gmail_ingestion.md) for trusted outreach bindings, durable deduplication and pending replies. Quote parsing and live engine delivery are the next part of build-plan step 3.
+
 ## Frontend
 
 Build against `docs/api.md`. Until the backend streams real events, replay `mock/events.json` and use `mock/ceiling.json` and `mock/discovery.json` as the responses of `GET /jobs/{id}/ceiling` and `POST /dealers/discover`.

@@ -22,6 +22,7 @@ class Response:
     parsed: ParsedReply
     turns: tuple[dict, ...] = ()      # call transcript, for call responses
     from_addr: str | None = None      # sender of an email reply (None = the dealer's email on file)
+    contact_verified: bool = False    # scripted stand-in for trusted phone-to-email attribution
 
 
 @dataclass
@@ -74,7 +75,8 @@ class SimTransport:
         self.seen.add(msg.dealer_id)
         sim = self.dealers[msg.dealer_id]
         for r in sim.script.get((msg.kind, msg.channel), []):
-            inbound = Inbound(msg.dealer_id, r.source, r.text, r.parsed, in_reply_to=msg.message_id, turns=r.turns,
-                              from_addr=r.from_addr)
+            inbound = Inbound(msg.dealer_id, r.source, r.text, r.parsed, in_reply_to=msg.message_id,
+                              from_addr=(r.from_addr or sim.dealer.email) if r.source == "email" else r.from_addr,
+                              turns=r.turns, contact_verified=r.contact_verified)
             self.scheduler.at(sent_at + r.delay, lambda t, i=inbound: self.deliver(t, i))
         return SendResult(True, sent_at, sent_copy=msg.body if msg.channel == "email" else None, errors=errors)

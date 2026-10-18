@@ -8,6 +8,7 @@ The engine never touches the ceiling. It is given:
 
 import re
 from dataclasses import dataclass, field, replace
+from email.utils import parseaddr
 from typing import Callable, Protocol
 
 from sealed.core import strategy
@@ -67,7 +68,7 @@ class Engine:
         self.guard = Guard(checker)
         self.cc, self.tag, self.waits = cc, tag, waits
         self.log = log or EventLog(job.id, job.run_id, job.mode)
-        self.ledger = Ledger(job.deadline)
+        self.ledger = Ledger(job.deadline, {d.id: d.email for d in job.dealers}, job.currency)
         self.state = "CREATED"
         self.round = 1
         self.started_at = 0.0
@@ -78,7 +79,7 @@ class Engine:
         self.flagged: set[str] = set()
         self.price_match_sent: dict[str, float] = {}
         self.last_written_at: dict[str, float] = {}
-        self.reply_addr: dict[str, str] = {}      # phone-only dealers: address of their first written reply
+        self.reply_addr: dict[str, str] = {}      # phone-only dealers: first attributed written reply address
         self.sent_keys: set[tuple] = set()
         self.outbound: dict[str, Outbound] = {}
         self.rejected_quotes: set[str] = set()
@@ -115,7 +116,7 @@ class Engine:
         return t
 
     def email_to(self, dealer_id: str) -> str | None:
-        """The dealer's email, or for a phone-only dealer the address its first written reply came from."""
+        """The configured email, or a phone-only dealer's address attributed by trusted ingestion."""
         return self.job.dealer(dealer_id).email or self.reply_addr.get(dealer_id)
 
     def timers(self) -> list[tuple[float, str]]:
@@ -151,20 +152,38 @@ class Engine:
         self._n_reply += 1
         rid = f"r_{self._n_reply:02d}"
         dealer = self.job.dealer(inbound.dealer_id)
-        if inbound.source == "email" and inbound.from_addr and not self.email_to(dealer.id):
-            self.reply_addr[dealer.id] = inbound.from_addr
+        if (inbound.source == "email" and inbound.contact_verified and inbound.from_addr
+                and not self.email_to(dealer.id)):
+            contact = self.outbound.get(inbound.in_reply_to or "")
+            address = parseaddr(inbound.from_addr)[1]
+            if (contact and contact.dealer_id == dealer.id and contact.channel == "call"
+                    and dealer.id in self.contacted and address):
+                self.reply_addr[dealer.id] = address
+                self.ledger.dealer_emails[dealer.id] = address
         src = {"email": "vendor_email", "call": "call", "fo_relay": "fo_relay"}[inbound.source]
         self.log.emit(now, "reply.received", dealer.id, {
             "reply_id": rid, "in_reply_to": inbound.in_reply_to, "source": src,
-            "from": inbound.from_addr or ((self.email_to(dealer.id) or "unknown") if inbound.source == "email"
-                                          else "fo@wajo.ai"),
+            "from": inbound.from_addr if inbound.source == "email" else "fo@wajo.ai",
             "subject": f"Re: {messages.subject_for(self.job, self.tag, 'rfq')}" if inbound.source == "email" else None,
             "text": inbound.text,
             "evidence": {"kind": "gmail_message" if inbound.source == "email" else "fo_conversation",
                          "ref": f"{self.job.mode}-{rid}"}})
 
-        if (self.state == "BOOKING" and dealer.id == self.winner and inbound.source == "email"
+        if (self.state == "BOOKING" and dealer.id == self.winner and self.ledger.verified_sender(inbound)
                 and inbound.parsed.confirms_booking):
+            p = self.proposal
+            exact = (p is not None and self.booking_message is not None
+                     and inbound.in_reply_to == self.booking_message and self.ledger.is_firm(inbound)
+                     and not inbound.parsed.suspicious and inbound.parsed.price_total == p["price_total"]
+                     and inbound.parsed.currency == p["currency"]
+                     and inbound.parsed.available == p["delivery_date"])
+            if not exact:
+                self.log.emit(now + 0.2, "job.needs_human", dealer.id, {
+                    "reason_code": "booking_mismatch", "blocking": True,
+                    "message": "The dealer's confirmation does not match the sent booking and approved terms. "
+                               "Nothing was marked complete; please review the reply."})
+                self.state = "NEEDS_HUMAN"
+                return now
             self.log.emit(now + 0.2, "quote.verified", dealer.id, {
                 "subject_id": self.booking_message, "status": "VERIFIED",
                 "reason": "Dealer's own confirmation email is in your inbox.",
@@ -182,25 +201,26 @@ class Engine:
                                "Review the transcript before relying on anything from it."})
 
         q = self.ledger.add(rid, inbound, now)
-        if inbound.source == "email":
+        if q.verified:
             self.last_written_at[dealer.id] = now
             self.contacted.add(dealer.id)
         self.log.emit(now + 0.2, "quote.parsed", dealer.id, {
             "reply_id": rid, "quote_id": q.quote_id, "source": "call" if q.source == "call" else "email",
             "price_total": q.price_total, "price_unit": q.price_total, "derived_total": False,
-            "currency": self.job.currency, "firm": q.firm, "hedge_words": list(q.hedge_words),
+            "currency": inbound.parsed.currency, "firm": q.firm, "hedge_words": list(q.hedge_words),
             "delivery_date": q.available, "meets_deadline": q.meets_deadline, "meets_spec": q.meets_spec,
             "declined": q.declined, "suspicious_instructions": q.suspicious,
-            "numbers_grounded": inbound.parsed.numbers_grounded,
+            "numbers_grounded": q.numbers_grounded,
             **({"breakdown": q.breakdown, "breakdown_flags": list(q.breakdown_flags)} if q.breakdown else {})})
         if q.price_total is not None and not q.declined:
-            verified = inbound.source == "email" and inbound.from_addr in (None, self.email_to(dealer.id))
+            verified = q.verified
             self.log.emit(now + 0.3, "quote.verified", dealer.id, {
                 "subject_id": q.quote_id, "status": "VERIFIED" if verified else "UNVERIFIED",
                 "reason": "Dealer's own email is in your inbox." if verified else
                 ("Spoken on a call. Not firm until it arrives in writing." if q.source == "call"
+                 else "Email sender does not match the dealer." if q.source == "email"
                  else "Relayed by Fo; not the dealer's own email."),
-                "evidence": {"kind": "gmail_message" if verified else "fo_conversation",
+                "evidence": {"kind": "gmail_message" if q.source == "email" else "fo_conversation",
                              "ref": f"{self.job.mode}-{rid}"}})
 
         t = now + 0.4
@@ -217,7 +237,10 @@ class Engine:
             self.firm_up_sent.add(q.dealer_id)
             t = self._send(t, replace(d, round=self.round))
 
-        if self.state == "WAITING_AFTER_REJECT" and q.firm:
+        if (self.state == "AWAITING_APPROVAL" and self.proposal and q.verified
+                and q.dealer_id == self.proposal["vendor_id"]):
+            self._qualify(t + 0.1, "The proposed dealer updated its written terms.")
+        elif self.state == "WAITING_AFTER_REJECT" and q.firm:
             self._qualify(t + 0.1, "New firm written quote after a rejected proposal.")
         return t
 
@@ -227,11 +250,16 @@ class Engine:
         keys = ("proposal_id", "vendor_id", "price_total", "currency", "delivery_date")
         if self.state != "AWAITING_APPROVAL" or p is None or any(echo.get(k) != p[k] for k in keys):
             raise StaleProposal("approval does not match the current proposal")
+        current = self.ledger.latest_firm(p["vendor_id"])
+        if current is None or current.quote_id != p["quote_id"]:
+            raise StaleProposal("the quoted terms have been superseded")
         self.log.emit(now, "job.approved", p["vendor_id"], {k: p[k] for k in keys if k != "vendor_id"})
         self.state, self.winner = "BOOKING", p["vendor_id"]
         t = self._send(now + 0.5, Decision(p["vendor_id"], "propose", "booking", round=self.round,
                                            own_quote_id=p["quote_id"], reason="User approved the exact terms."),
                        decided=False, approved_price=p["price_total"])
+        if self.state != "BOOKING" or self.booking_message is None:
+            return t
         for d in self.job.dealers:
             if d.id != self.winner and d.id in self.contacted:
                 t = self._send(t, Decision(d.id, "propose", "cancel", round=self.round,
@@ -273,10 +301,13 @@ class Engine:
         self.trust["messages_checked_before"] += 1
         self._guard_event(t, msg, pre)
         if not pre.passed:
+            blocking = d.kind == "booking"
             self.log.emit(t + 0.1, "job.needs_human", d.dealer_id, {
-                "reason_code": "guard_blocked", "blocking": False,
+                "reason_code": "guard_blocked", "blocking": blocking,
                 "message": f"A {d.kind} {d.channel} to {self.job.dealer(d.dealer_id).name} was blocked by the "
                            "pre-send guard and not sent."})
+            if blocking:
+                self.state = "NEEDS_HUMAN"
             return t + 0.2
         self.sent_keys.add(key)
         self.outbound[msg.message_id] = msg
@@ -296,9 +327,10 @@ class Engine:
                 **({"fo_said": result.note[:500]} if result.note else {})})
             self.state = "NEEDS_HUMAN"
             return result.sent_at
-        if result.reason_code == "payment_mention":
+        if result.reason_code is not None:
             self.log.emit(result.sent_at, "job.needs_human", d.dealer_id, {
-                "reason_code": "payment_mention", "blocking": True, "message": NOT_SENT["payment_mention"],
+                "reason_code": result.reason_code, "blocking": True,
+                "message": "Fo reported sending, but the turn needs review. Not resent; check Gmail or the call transcript.",
                 **({"fo_said": result.note[:500]} if result.note else {})})
             self.state = "NEEDS_HUMAN"
         st = result.sent_at
@@ -333,9 +365,12 @@ class Engine:
             "message_id": msg.message_id, "cc_copy_found": True, "matched": matched,
             "diff": None if matched else "Fo's sent copy differs from our text.", "guard_passed": res.passed})
         if not matched or not res.passed:
+            blocking = msg.kind == "booking"
             self.log.emit(t + 0.1, "job.needs_human", msg.dealer_id, {
-                "reason_code": "audit_mismatch", "blocking": False,
+                "reason_code": "audit_mismatch", "blocking": blocking,
                 "message": "The copy Fo sent differs from our text or failed a check. Not resent; please review."})
+            if blocking:
+                self.state = "NEEDS_HUMAN"
 
     def _qualify(self, t: float, why: str) -> None:
         res = self.qualifier(self.ledger.quotes, set(self.flagged), set(self.rejected_quotes))
@@ -357,6 +392,7 @@ class Engine:
             self.log.emit(t + 0.2, "approval.requested", q.dealer_id, {"proposal_id": p["proposal_id"]})
             self.state = "AWAITING_APPROVAL"
         else:
+            self.proposal = None
             closest = res.quote
             self.log.emit(t, "job.needs_human", closest.dealer_id if closest else None, {
                 "reason_code": res.reason_code, "blocking": True, "message": res.reason,

@@ -1,10 +1,14 @@
 import threading
 import time
+import json
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pytest
 
 from sealed.core.engine import Engine
 from sealed.core.models import Decision
+from sealed.core.guard import Guard
 from sealed.fo import messages
 from sealed.fo.adapter import CONFIRM_NO, CONFIRM_YES, FoTransport, classify
 from sealed.fo.client import FoTimeout
@@ -26,6 +30,7 @@ class FakeFo:
         self.script = list(script)
         self.asks: list[tuple[str, str | None]] = []
         self.polls = 0
+        self.reply_ids = []
         self._busy = False
         self._n = 0
 
@@ -51,6 +56,7 @@ class FakeFo:
 
     def reply(self, conversation_id, wait_seconds=40):
         self.polls += 1
+        self.reply_ids.append(conversation_id)
         return self._next(conversation_id)
 
     def conversation(self, conversation_id):
@@ -78,6 +84,7 @@ def store(tmp_path):
 
 def test_classify_real_fo_replies():
     assert classify(SENT_1C) == "sent"
+    assert classify("Sent, exactly as written. You're on CC.") == "sent"
     assert classify(CALL_1D) == "sent"
     assert classify(REFUSED_1B) == "refused"
     assert classify("Here's the draft I'll send to Alpha Motors: ... Good to send?") == "question"
@@ -178,3 +185,202 @@ def test_engine_raises_needs_human_when_fo_refuses(store):
     nh = eng.log.of_type("job.needs_human")
     assert nh and nh[0]["data"]["reason_code"] == "fo_refused" and "fo_said" in nh[0]["data"]
     assert eng.state == "NEEDS_HUMAN" and not eng.log.of_type("message.sent")
+
+
+def test_same_message_is_atomic_across_threads_and_preexisting_transport_instances(store):
+    fo = FakeFo([ok("Sent.")] * 2)
+    transports = [FoTransport(fo, store), FoTransport(fo, store)]
+    start = threading.Barrier(2)
+    def send(t):
+        start.wait(timeout=5)
+        return t.send(0, msg(), lambda p: True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(send, transports))
+    assert all(r.sent for r in results) and len(fo.asks) == 1
+    assert sum(bool(r.errors) for r in results) == 1
+
+
+def test_different_messages_share_one_account_queue_across_transport_instances(store):
+    fo = FakeFo([ok("Sent.")] * 2)
+    transports = [FoTransport(fo, store), FoTransport(fo, store)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda i: transports[i].send(0, msg(mid=f"m_{i}"), lambda p: True), range(2)))
+    assert all(r.sent for r in results) and len(fo.asks) == 2
+    assert [cid for _, cid in fo.asks] == [None, "conv-1"]
+    assert len(json.loads(store.read_text())["messages"]) == 2
+
+
+@pytest.mark.parametrize("scope", [{"job_id": "other-job"}, {"run_id": "other-run"}])
+def test_message_ids_and_dealer_conversations_are_scoped_to_job_and_run(store, scope):
+    fo = FakeFo([ok("Sent.")] * 3)
+    t = FoTransport(fo, store)
+    assert t.send(0, msg(), lambda p: True).sent
+    assert t.send(1, replace(msg(), **scope), lambda p: True).sent
+    assert t.send(2, replace(msg(mid="m_02"), **scope), lambda p: True).sent
+    assert [cid for _, cid in fo.asks] == [None, None, "conv-2"]
+
+
+def test_a_reused_message_id_with_a_changed_payload_is_not_reported_as_sent(store):
+    fo = FakeFo([ok("Sent.")])
+    t = FoTransport(fo, store)
+    t.send(0, msg(), lambda p: True)
+    res = t.send(1, replace(msg(), to="another@example.com"), lambda p: True)
+    assert not res.sent and res.errors[0]["code"] == "message_id_conflict" and len(fo.asks) == 1
+
+
+def test_unscoped_messages_never_reach_fo(store):
+    fo = FakeFo([])
+    with pytest.raises(ValueError, match="job_id and run_id"):
+        FoTransport(fo, store).send(0, replace(msg(), job_id=""), lambda p: True)
+    assert not fo.asks
+
+
+def test_pending_reservation_is_on_disk_before_the_first_ask(store):
+    class CheckPending(FakeFo):
+        def ask(self, message, conversation_id):
+            data = json.loads(store.read_text())
+            assert data["version"] == 2
+            assert data["messages"][data["active"]]["status"] == "pending"
+            return super().ask(message, conversation_id)
+    assert FoTransport(CheckPending([ok("Sent.")]), store).send(0, msg(), lambda p: True).sent
+    assert json.loads(store.read_text())["active"] is None
+
+
+def test_late_conversation_id_is_saved_and_used_for_polling_confirmation_and_followups(store):
+    m = msg()
+    fo = FakeFo([FoTimeout("lost first response"), {"status": "working", "conversationId": "late"},
+                 {**ok(m.body + "\nGood to send?"), "conversationId": "late"}, ok("Sent."), ok("Sent.")])
+    t = FoTransport(fo, store, sleep=lambda _: None)
+    assert t.send(0, m, lambda p: True).sent
+    assert t.send(1, msg(kind="firm_up", mid="m_02"), lambda p: True).sent
+    assert fo.reply_ids == [None, "late"]
+    assert [cid for _, cid in fo.asks] == [None, "late", "late"]
+
+
+def test_a_reply_timeout_keeps_polling_the_same_conversation_without_resending(store):
+    fo = FakeFo([{"status": "working"}, FoTimeout("reply timeout"), ok("Sent.")])
+    assert FoTransport(fo, store).send(0, msg(), lambda p: True).sent
+    assert len(fo.asks) == 1 and fo.reply_ids == ["conv-1", "conv-1"]
+
+
+def test_unresolved_turn_blocks_new_messages_even_after_restart(store):
+    clock = iter(range(0, 10000, 400)).__next__
+    fo = FakeFo([{"status": "working"}] * 4)
+    t = FoTransport(fo, store, clock=lambda: float(clock()), sleep=lambda _: None)
+    assert not t.send(0, msg(), lambda p: True).sent
+    again = FoTransport(fo, store).send(1, replace(msg(mid="new"), job_id="other"), lambda p: True)
+    assert not again.sent and again.errors[0]["code"] == "fo_turn_unresolved"
+    assert len(fo.asks) == 1
+
+
+def test_unexpected_conversation_is_not_confirmed_or_saved_as_the_dealers_conversation(store):
+    fo = FakeFo([ok("Sent."), {**ok("Good to send?"), "conversationId": "wrong"}])
+    t = FoTransport(fo, store)
+    assert t.send(0, msg(), lambda p: True).sent
+    res = t.send(1, msg(mid="m_02"), lambda p: True)
+    assert not res.sent and res.reason_code == "send_unclear" and len(fo.asks) == 2
+    assert t.store.conversation(msg()) == "conv-1"
+
+
+def test_a_question_without_a_recovered_conversation_id_never_opens_a_new_conversation(store):
+    fo = FakeFo([FoTimeout("lost"), {**ok(msg().body + " Good to send?"), "conversationId": None}])
+    res = FoTransport(fo, store).send(0, msg(), lambda p: True)
+    assert not res.sent and res.reason_code == "send_unclear" and len(fo.asks) == 1
+
+
+def test_payment_instructions_are_rejected_before_confirmation_even_if_callback_allows_them(store):
+    fo = FakeFo([ok("Please pay the deposit. Good to send?"), ok("Okay, I won't send it.")])
+    res = FoTransport(fo, store).send(0, msg(), lambda p: True)
+    assert not res.sent and res.reason_code == "payment_mention"
+    assert [text for text, _ in fo.asks][1:] == [CONFIRM_NO]
+
+
+def test_verbatim_approved_booking_preview_is_not_mistaken_for_a_payment_action(store):
+    m = messages.build(J, Decision("a", "propose", "booking"), "booking", "TAG", "buyer@example.com", 30450)
+    fo = FakeFo([ok(m.body + " Good to send?"), ok("Sent.")])
+    res = FoTransport(fo, store).send(0, m, lambda p: Guard(FakeChecker()).check(m, preview=p).passed)
+    assert res.sent and res.reason_code is None and fo.asks[1][0] == CONFIRM_YES
+
+
+def test_sent_payment_warning_is_preserved_when_a_duplicate_is_suppressed(store):
+    fo = FakeFo([ok("Sent. I paid the deposit.")])
+    res = FoTransport(fo, store).send(0, msg(), lambda p: True)
+    again = FoTransport(fo, store).send(1, msg(), lambda p: True)
+    assert res.sent and again.sent
+    assert res.reason_code == again.reason_code == "payment_mention" and len(fo.asks) == 1
+
+
+def test_sending_during_preview_cancellation_pauses_the_engine(store):
+    fo = FakeFo([ok("I changed the draft. Good to send?"), ok("Sent.")])
+    eng = Engine(J, FoTransport(fo, store), FakeChecker(), qualifier=None, cc="buyer@example.com", tag="TAG")
+    eng.start(0)
+    assert eng.state == "NEEDS_HUMAN" and len(fo.asks) == 2
+    assert eng.log.of_type("job.needs_human")[-1]["data"]["reason_code"] == "audit_mismatch"
+
+
+def test_network_exception_is_sanitized_and_never_retried(store):
+    fo = FakeFo([RuntimeError("Authorization: Bearer PRIVATE_TOKEN")])
+    t = FoTransport(fo, store)
+    res = t.send(0, msg(), lambda p: True)
+    assert not res.sent and res.reason_code == "send_unclear"
+    assert "PRIVATE_TOKEN" not in repr(res) + store.read_text()
+    assert not t.send(1, msg(mid="next"), lambda p: True).sent and len(fo.asks) == 1
+
+
+def test_legacy_state_is_preserved_and_requires_review_instead_of_guessing_a_migration(store):
+    data = json.dumps({"messages": {"m_01": {"status": "sent"}}, "conversations": {"a": "old"}})
+    store.write_text(data)
+    with pytest.raises(ValueError, match="Legacy unscoped"):
+        FoTransport(FakeFo([]), store)
+    assert store.read_text() == data
+
+
+def test_state_write_failure_before_reservation_never_contacts_fo(store, monkeypatch):
+    import sealed.fo.adapter as adapter
+    def fail(*args):
+        raise OSError("write denied")
+    monkeypatch.setattr(adapter.os, "replace", fail)
+    fo = FakeFo([])
+    res = FoTransport(fo, store).send(0, msg(), lambda p: True)
+    assert not res.sent and res.reason_code == "integration_down" and not fo.asks
+    assert not store.exists() and not list(store.parent.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("text", ["Sentinel is ready.", "Sent?", "Sent the draft?",
+                                 "Done drafting. Good to send?", "Done. Shall I send it?", "Working on it."])
+def test_incomplete_or_questionable_status_text_is_never_classified_as_sent(text):
+    assert classify(text) != "sent"
+
+
+def test_missing_sent_conversation_id_flags_the_send_and_blocks_further_turns(store):
+    fo = FakeFo([{**ok("Sent."), "conversationId": None}])
+    t = FoTransport(fo, store)
+    res = t.send(0, msg(), lambda p: True)
+    assert res.sent and res.reason_code == "send_unclear"
+    assert not t.send(1, msg(mid="next"), lambda p: True).sent and len(fo.asks) == 1
+
+
+def test_failure_to_save_after_send_keeps_the_original_reservation_and_does_not_resend(store, monkeypatch):
+    import sealed.fo.adapter as adapter
+    real_replace = adapter.os.replace
+    calls = 0
+    def fail_after_reservation(*args):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise OSError("disk failure after the original request")
+        return real_replace(*args)
+    fo = FakeFo([ok("Sent.")])
+    with monkeypatch.context() as patch:
+        patch.setattr(adapter.os, "replace", fail_after_reservation)
+        res = FoTransport(fo, store).send(0, msg(), lambda p: True)
+    assert not res.sent and res.reason_code == "send_unclear"
+    again = FoTransport(fo, store).send(1, msg(), lambda p: True)
+    assert not again.sent and len(fo.asks) == 1
+    assert json.loads(store.read_text())["active"] is not None
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
+def test_poll_limit_must_be_finite_and_positive(store, value):
+    with pytest.raises(ValueError):
+        FoTransport(FakeFo([]), store, poll_limit_s=value)

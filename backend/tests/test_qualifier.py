@@ -1,15 +1,14 @@
 import pytest
 
-from sealed.core.ledger import Ledger
 from sealed.private import vault
 from sealed.private.qualifier import qualify
-from tests.helpers import call, email
+from tests.helpers import call, email, ledger
 
 
 @pytest.fixture
 def led():
     vault.store("job_q", 31000.0)
-    yield Ledger("2026-11-30")
+    yield ledger()
     vault.forget("job_q")
 
 
@@ -48,3 +47,24 @@ def test_rejected_quotes_are_excluded(led):
     a = led.add("r1", email("a", 30000.0), 1)
     led.add("r2", email("b", 30500.0), 2)
     assert qualify("job_q", led.quotes, set(), {a.quote_id}).quote.dealer_id == "b"
+
+
+def test_latest_price_replaces_a_cheaper_historical_quote(led):
+    led.add("old", email("a", 30000), 1)
+    led.add("new", email("a", 33000), 2)
+    res = qualify("job_q", led.quotes, set())
+    assert res.action == "needs_human" and res.quote.price_total == 33000
+
+
+def test_latest_withdrawal_makes_a_dealer_ineligible(led):
+    led.add("old", email("a", 30000), 1)
+    led.add("withdrawn", email("a", None, declined=True), 2)
+    res = qualify("job_q", led.quotes, set())
+    assert res.action == "needs_human" and res.reason_code == "all_declined" and res.quote is None
+
+
+def test_excluding_latest_quote_does_not_revive_an_older_quote(led):
+    led.add("old", email("a", 30000), 1)
+    latest = led.add("new", email("a", 30500), 2)
+    res = qualify("job_q", led.quotes, set(), {latest.quote_id})
+    assert res.action == "needs_human" and res.quote is None

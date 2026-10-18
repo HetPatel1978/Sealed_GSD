@@ -39,7 +39,7 @@ SAFETY_PHRASES = (
 
 
 def money(x: float) -> str:
-    return f"${x:,.0f}"
+    return f"${x:,.2f}".removesuffix(".00")
 
 
 def new_tag() -> str:
@@ -179,7 +179,7 @@ def number_provenance(msg: Outbound, job: Job) -> list[dict]:
 
 def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_price: float | None = None,
           email_to: str | None = None) -> Outbound:
-    """`email_to` overrides the dealer's email (a phone-only dealer's address, learned from its first written reply)."""
+    """`email_to` overrides the dealer's email with a phone-only address attributed by trusted ingestion."""
     dealer = job.dealer(d.dealer_id)
     to = email_to or dealer.email
     allowed = {p for p in (d.own_price, d.cited_price, d.offer, approved_price) if p is not None}
@@ -188,14 +188,16 @@ def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_pr
         body = call_brief(job, d, dealer.name, cc, emailed=bool(to))
         return Outbound(message_id, d.dealer_id, d.kind, "call", d.round, dealer.phone or "", None, body,
                         wrap_call_for_fo(dealer.name, dealer.phone or "", body), d.offer, d.cited_quote_id,
-                        frozenset(allowed), price_sources=sources)
+                        frozenset(allowed), price_sources=sources, dealer_name=dealer.name,
+                        job_id=job.id, run_id=job.run_id)
     if not to:
         raise ValueError(f"no email address for dealer {dealer.id}")
     body = email_body(job, d, dealer.name, approved_price)
     subject = subject_for(job, tag, d.kind)
     return Outbound(message_id, d.dealer_id, d.kind, "email", d.round, to, subject, body,
                     wrap_for_fo(to, cc, subject, body), d.offer, d.cited_quote_id, frozenset(allowed),
-                    booking_approved=d.kind == "booking" and approved_price is not None, price_sources=sources)
+                    booking_approved=d.kind == "booking" and approved_price is not None, price_sources=sources,
+                    cc=cc, dealer_name=dealer.name, job_id=job.id, run_id=job.run_id)
 
 
 # --- Legacy (spike 1b only): first-person text signed by the user. Fo refuses to send this. -------------
