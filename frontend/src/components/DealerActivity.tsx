@@ -1,22 +1,30 @@
 // One card per dealer: contact details, latest quote, and the full history of what we sent and what came back.
 
+import { useEffect, useRef } from 'react'
 import type { Activity, DealerActivity as Dealer } from '../activity'
 import QuoteEvidence from './QuoteEvidence'
 import { kindLabel, label, money, time } from './format'
 
-export default function DealerActivity({ activity, currency, states }: {
+export default function DealerActivity({ activity, currency, states, focus }: {
   activity: Activity; currency: string; states?: Map<string, string>
+  focus?: { id: string; n: number } | null   // open + scroll to this dealer (n changes on every request)
 }) {
-  if (activity.dealers.length === 0) return null
+  if (activity.dealers.length === 0) return <section className="panel"><p className="muted">No dealer activity yet.</p></section>
   return <section className="panel">
-    <div className="section-title"><h3>Dealer activity</h3><span className="small">Everything sent and received, per dealer</span></div>
-    <div className="dealer-cards">{activity.dealers.map(d => <DealerCard key={d.id} dealer={d} activity={activity} currency={currency} state={states?.get(d.id)} />)}</div>
+    <div className="section-title"><h3>Dealer activity</h3><span className="small">Everything sent and received, per dealer. Click a dealer to open its history.</span></div>
+    <div className="dealer-cards">{activity.dealers.map(d => <DealerCard key={d.id} dealer={d} activity={activity} currency={currency} state={states?.get(d.id)} focus={focus?.id === d.id ? focus.n : null} />)}</div>
   </section>
 }
 
-function DealerCard({ dealer, activity, currency, state }: { dealer: Dealer; activity: Activity; currency: string; state?: string }) {
+function DealerCard({ dealer, activity, currency, state, focus }: { dealer: Dealer; activity: Activity; currency: string; state?: string; focus: number | null }) {
   const q = dealer.latest_quote
-  return <details className="dealer-card">
+  const ref = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    if (focus == null || !ref.current) return
+    ref.current.open = true
+    ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [focus])
+  return <details className="dealer-card" ref={ref}>
     <summary>
       <div>
         <strong>{dealer.name}</strong>

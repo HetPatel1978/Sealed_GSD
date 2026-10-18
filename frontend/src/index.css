@@ -176,3 +176,33 @@ table.breakdown tr.total td { font-weight: 700; border-top: 1px solid #cdd8ba; }
 }
 .event-feed .event summary strong { text-transform: none; }
 td.muted { text-transform: none; }
+
+/* Layout v3: pinned summary + next-step card + tabs */
+.job-overview.compact { padding: 22px 28px; }
+.job-overview.compact h2 { margin: 6px 0 4px; }
+.job-overview.compact .small { margin-top: 8px; }
+.next-step { border-width: 2px; border-color: #c5d0af; }
+.next-step h2 { margin: 6px 0 10px; }
+.next-step > p { margin: 8px 0 14px; }
+.next-step .actions { margin-top: 14px; }
+.next-step.approval { background: #f0f4e6; }
+.next-step.approval .evidence { background: #fff; border: 1px solid #d7e0c6; border-radius: 8px; padding: 12px 16px; margin-bottom: 4px; }
+.next-step.alert { border-color: #e2c28f; background: #fffcf3; }
+.next-step.done { border-color: #b9d0ba; background: #edf5ed; }
+.next-step .restore { align-items: flex-end; }
+.next-step .restore .ceiling-input { flex: 0 1 320px; }
+.alert-banner { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: #fffcf3; color: #766133; border: 1px solid #e7d9b4; border-radius: 8px; padding: 12px 16px; margin-bottom: 22px; font-weight: 500; font-size: 13px; }
+.alert-banner:hover:not(:disabled) { background: #fbf4e0; }
+.alert-banner .arrow { margin-left: auto; }
+#job-tabs { scroll-margin-top: 12px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid #dce1d4; margin: 8px 0 22px; overflow-x: auto; }
+.tab { background: transparent; color: #5f6f5a; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 12px 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.tab:hover:not(:disabled) { background: #edf1e9; }
+.tab.active { color: #214f3d; border-bottom-color: #214f3d; }
+.tab-count { font-size: 11px; background: #eef1e6; color: #6b7a5a; padding: 1px 7px; border-radius: 9px; font-weight: 600; }
+.tab-new { font-size: 10px; background: #214f3d; color: #fff; padding: 2px 7px; border-radius: 9px; }
+.tab-dot.alert { width: 8px; height: 8px; border-radius: 50%; background: #c98a3a; display: inline-block; }
+.ceiling-input .label-row { display: flex; align-items: center; justify-content: space-between; }
+.ceiling-input small { font-weight: 400; }
+.ceiling-input small.warning { padding: 0; }
+.form-grid label > small { font-weight: 400; }
