@@ -16,8 +16,8 @@ from sealed.core.breakdown import summary as breakdown_summary
 from sealed.core.call_review import review_call
 from sealed.core.events import EventLog
 from sealed.core.guard import Guard
-from sealed.core.ledger import Ledger
-from sealed.core.models import Decision, Inbound, Job, Outbound, Quote
+from sealed.core.ledger import Ledger, latest_written, written_order
+from sealed.core.models import Decision, EmailAudit, EmailDraft, Inbound, Job, Outbound, Quote
 from sealed.fo import messages
 
 
@@ -29,6 +29,9 @@ class SendResult:
     errors: list[dict] = field(default_factory=list)   # e.g. a Fo turn timeout that was polled, not resent
     reason_code: str | None = None        # why it wasn't sent (fo_refused, audit_mismatch, send_unclear, ...)
     note: str | None = None               # Fo's own words, for the human
+    draft: EmailDraft | None = None       # reviewed draft; not proof of the delivered copy
+    audit: EmailAudit | None = None       # authenticated Gmail result, never a Fo self-report
+    queued: bool = False                 # durable outbox intent; never evidence of a send
 
 
 class Transport(Protocol):
@@ -45,7 +48,7 @@ class Waits:
 
 
 NOT_SENT = {
-    "audit_mismatch": "Fo's preview did not match the exact text. Nothing was sent; please review.",
+    "audit_mismatch": "Fo's draft failed the authorized content checks. Nothing was marked sent; please review.",
     "fo_refused": "Fo declined to send this message. Nothing was sent; please review what Fo said.",
     "fo_failed": "Fo reported a failure. Nothing was sent; please review.",
     "send_unclear": "Fo's reply didn't clearly say it was sent. Not resent; check Gmail before retrying.",
@@ -87,6 +90,9 @@ class Engine:
         self.winner: str | None = None
         self.booking_message: str | None = None
         self._n_msg = self._n_reply = self._n_prop = 0
+        self.audit_observations: set[str] = set()
+        self.queued_messages: set[str] = set()
+        self.reply_context: dict[str, dict] = {}
         self.trust = {"budget_revealed_count": 0, "messages_checked_before": 0, "messages_checked_after": 0,
                       "false_claims": 0, "commitments_without_approval": 0, "suspicious_instructions_flagged": 0}
 
@@ -105,6 +111,8 @@ class Engine:
         self.log.emit(now, "job.started", None, {"seed": seed, "round": 1})
         t = now
         for d in self.job.dealers:
+            if d.id in self.contacted:
+                continue  # imported trusted outreach must not receive another initial RFQ
             if d.email:
                 t = self._send(t, Decision(d.id, "rfq", "rfq",
                                            reason="Round 1 request for a written out-the-door total."), decided=False)
@@ -148,10 +156,16 @@ class Engine:
         return t
 
     # ---- inbound ---------------------------------------------------------------------------------------
-    def on_inbound(self, now: float, inbound: Inbound) -> float:
+    def on_inbound(self, now: float, inbound: Inbound, *, received_at: float | None = None) -> float:
         self._n_reply += 1
         rid = f"r_{self._n_reply:02d}"
         dealer = self.job.dealer(inbound.dealer_id)
+        evidence_ref = (f"gmail:{inbound.mail_evidence.gmail_id}" if inbound.mail_evidence else f"{self.job.mode}-{rid}")
+        previous = next((q for q in latest_written(self.ledger.quotes) if q.dealer_id == dealer.id), None)
+        source_time = now if received_at is None else received_at
+        incoming_order = (source_time, int(inbound.mail_evidence.gmail_id)
+                          if inbound.mail_evidence and inbound.mail_evidence.gmail_id.isdigit() else 0)
+        not_stale = previous is None or incoming_order >= written_order(previous)
         if (inbound.source == "email" and inbound.contact_verified and inbound.from_addr
                 and not self.email_to(dealer.id)):
             contact = self.outbound.get(inbound.in_reply_to or "")
@@ -164,13 +178,14 @@ class Engine:
         self.log.emit(now, "reply.received", dealer.id, {
             "reply_id": rid, "in_reply_to": inbound.in_reply_to, "source": src,
             "from": inbound.from_addr if inbound.source == "email" else "fo@wajo.ai",
-            "subject": f"Re: {messages.subject_for(self.job, self.tag, 'rfq')}" if inbound.source == "email" else None,
+            "subject": inbound.subject if inbound.subject is not None else (
+                f"Re: {messages.subject_for(self.job, self.tag, 'rfq')}" if inbound.source == "email" else None),
             "text": inbound.text,
             "evidence": {"kind": "gmail_message" if inbound.source == "email" else "fo_conversation",
-                         "ref": f"{self.job.mode}-{rid}"}})
+                         "ref": evidence_ref}})
 
         if (self.state == "BOOKING" and dealer.id == self.winner and self.ledger.verified_sender(inbound)
-                and inbound.parsed.confirms_booking):
+                and not_stale and inbound.parsed.confirms_booking):
             p = self.proposal
             exact = (p is not None and self.booking_message is not None
                      and inbound.in_reply_to == self.booking_message and self.ledger.is_firm(inbound)
@@ -187,7 +202,7 @@ class Engine:
             self.log.emit(now + 0.2, "quote.verified", dealer.id, {
                 "subject_id": self.booking_message, "status": "VERIFIED",
                 "reason": "Dealer's own confirmation email is in your inbox.",
-                "evidence": {"kind": "gmail_message", "ref": f"{self.job.mode}-{rid}"}})
+                         "evidence": {"kind": "gmail_message", "ref": evidence_ref}})
             self._complete(now + 0.3)
             return now
 
@@ -200,10 +215,13 @@ class Engine:
                     "message": f"The call with {dealer.name} went outside the brief or touched on money. "
                                "Review the transcript before relying on anything from it."})
 
-        q = self.ledger.add(rid, inbound, now)
-        if q.verified:
-            self.last_written_at[dealer.id] = now
+        q = self.ledger.add(rid, inbound, now if received_at is None else received_at)
+        current = q in latest_written(self.ledger.quotes)
+        if q.verified and current:
+            self.last_written_at[dealer.id] = q.received_at
             self.contacted.add(dealer.id)
+            if inbound.mail_evidence:
+                self.reply_context[dealer.id] = {"evidence": inbound.mail_evidence, "subject": inbound.subject}
         self.log.emit(now + 0.2, "quote.parsed", dealer.id, {
             "reply_id": rid, "quote_id": q.quote_id, "source": "call" if q.source == "call" else "email",
             "price_total": q.price_total, "price_unit": q.price_total, "derived_total": False,
@@ -221,7 +239,10 @@ class Engine:
                  else "Email sender does not match the dealer." if q.source == "email"
                  else "Relayed by Fo; not the dealer's own email."),
                 "evidence": {"kind": "gmail_message" if q.source == "email" else "fo_conversation",
-                             "ref": f"{self.job.mode}-{rid}"}})
+                             "ref": evidence_ref}})
+
+        if q.verified and not current:
+            return now + 0.4  # keep history/evidence; stale mail cannot trigger actions or replace approval
 
         t = now + 0.4
         d = strategy.after_reply(q, q.dealer_id in self.firm_up_sent, q.dealer_id in self.flagged)
@@ -260,6 +281,9 @@ class Engine:
                        decided=False, approved_price=p["price_total"])
         if self.state != "BOOKING" or self.booking_message is None:
             return t
+        return self._decline_others(t)
+
+    def _decline_others(self, t: float) -> float:
         for d in self.job.dealers:
             if d.id != self.winner and d.id in self.contacted:
                 t = self._send(t, Decision(d.id, "propose", "cancel", round=self.round,
@@ -297,6 +321,14 @@ class Engine:
         self._n_msg += 1
         msg = messages.build(self.job, d, f"m_{self._n_msg:02d}", self.tag, self.cc, approved_price,
                              email_to=self.email_to(d.dealer_id))
+        context = self.reply_context.get(d.dealer_id)
+        if context and msg.email_brief is not None:
+            evidence = context["evidence"]
+            subject = context["subject"] or msg.subject
+            subject = subject if subject.lower().startswith("re:") else "Re: " + subject
+            msg = replace(msg, subject=subject, reply_to_message_id=evidence.message_id,
+                reply_thread_id=evidence.thread_id, fo_instruction=messages.wrap_email_brief_for_fo(
+                    msg.to, msg.cc, subject, msg.body, evidence.message_id))
         pre = self.guard.check(msg)
         self.trust["messages_checked_before"] += 1
         self._guard_event(t, msg, pre)
@@ -318,35 +350,94 @@ class Engine:
             return res.passed
 
         result = self.transport.send(t, msg, approve_preview)
+        if result.queued:
+            if result.sent or result.reason_code or result.draft or result.audit:
+                raise ValueError("Queued transport returned a send outcome.")
+            self.queued_messages.add(msg.message_id)
+            self.log.emit(t, "message.queued", msg.dealer_id, {"message_id": msg.message_id,
+                "kind": msg.kind, "round": msg.round, "channel": msg.channel})
+            return t
+        return self._finish_send(t, msg, result)
+
+    def on_send_result(self, t: float, message_id: str, result: SendResult) -> float:
+        """Apply one queued result; the durable worker commits this with the outbox receipt."""
+        if message_id not in self.queued_messages or result.queued:
+            raise ValueError("No queued message awaits this result.")
+        msg = self.outbound[message_id]
+        self.queued_messages.remove(message_id)
+        t = self._finish_send(t, msg, result)
+        if msg.kind == "booking" and self.state == "BOOKING" and self.booking_message == message_id:
+            return self._decline_others(t)
+        return t
+
+    def _finish_send(self, t: float, msg: Outbound, result: SendResult) -> float:
+        if (msg.email_brief is not None and result.sent
+                and (result.draft is None or not self.guard.check_email(msg, result.draft).passed)):
+            result.reason_code = result.reason_code or "audit_mismatch"
+        safe_note = self.guard.safe_note(msg, result.note)
         for err in result.errors:
-            self.log.emit(t + 0.6, "error", d.dealer_id, err)
+            self.log.emit(t + 0.6, "error", msg.dealer_id, err)
         if not result.sent:
             code = result.reason_code or "audit_mismatch"
-            self.log.emit(result.sent_at, "job.needs_human", d.dealer_id, {
+            self.log.emit(result.sent_at, "job.needs_human", msg.dealer_id, {
                 "reason_code": code, "blocking": True, "message": NOT_SENT.get(code, NOT_SENT["send_unclear"]),
-                **({"fo_said": result.note[:500]} if result.note else {})})
+                **({"fo_said": safe_note} if safe_note else {})})
             self.state = "NEEDS_HUMAN"
             return result.sent_at
         if result.reason_code is not None:
-            self.log.emit(result.sent_at, "job.needs_human", d.dealer_id, {
+            self.log.emit(result.sent_at, "job.needs_human", msg.dealer_id, {
                 "reason_code": result.reason_code, "blocking": True,
                 "message": "Fo reported sending, but the turn needs review. Not resent; check Gmail or the call transcript.",
-                **({"fo_said": result.note[:500]} if result.note else {})})
+                **({"fo_said": safe_note} if safe_note else {})})
             self.state = "NEEDS_HUMAN"
         st = result.sent_at
-        self.log.emit(st, "message.sent", d.dealer_id, {
+        event_body = msg.body
+        content = {}
+        if msg.email_brief is not None:
+            reviewed = result.draft is not None and self.guard.check_email(msg, result.draft).passed
+            event_body = result.draft.body if reviewed else ""
+            content = {"brief": msg.body, "content_source": "fo_preview" if reviewed else "pending_gmail"}
+        self.log.emit(st, "message.sent", msg.dealer_id, {
             "message_id": msg.message_id, "kind": msg.kind, "round": msg.round, "channel": msg.channel,
-            "to": msg.to if msg.channel == "email" else f"{self.job.dealer(d.dealer_id).name} sales line",
-            "subject": msg.subject, "body": msg.body, "offer": msg.offer, "cited_quote_id": msg.cited_quote_id,
-            "numbers": messages.number_provenance(msg, self.job)})
-        if d.dealer_id not in self.contacted and msg.kind == "rfq":
-            self.contacted.add(d.dealer_id)
-            self.log.emit(st, "vendor.contacted", d.dealer_id, {"message_id": msg.message_id, "round": msg.round})
+            "to": msg.to if msg.channel == "email" else f"{self.job.dealer(msg.dealer_id).name} sales line",
+            "subject": msg.subject, "body": event_body, "offer": msg.offer, "cited_quote_id": msg.cited_quote_id,
+            "numbers": messages.number_provenance(replace(msg, body=event_body), self.job), **content})
+        if msg.dealer_id not in self.contacted and msg.kind == "rfq":
+            self.contacted.add(msg.dealer_id)
+            self.log.emit(st, "vendor.contacted", msg.dealer_id, {"message_id": msg.message_id, "round": msg.round})
         if msg.kind == "booking":
             self.booking_message = msg.message_id
-        if msg.channel == "email" and result.sent_copy is not None:
+        if result.audit is not None:
+            self.on_email_audit(st + 1, result.audit)
+        elif msg.channel == "email" and result.sent_copy is not None:
             self._audit(st + 1, msg, result.sent_copy)
         return st + 1
+
+    def on_email_audit(self, t: float, result: EmailAudit) -> None:
+        """Apply trusted Gmail audit evidence once, scoped to a successfully sent payload."""
+        msg = self.outbound.get(result.message_id)
+        sent = any(e["data"]["message_id"] == result.message_id for e in self.log.of_type("message.sent"))
+        if msg is None or msg.channel != "email" or not sent or not result.validates(msg):
+            raise ValueError("Audit does not belong to a sent email in this job/run.")
+        if result.state == "pending" or result.observation_id in self.audit_observations:
+            return
+        self.audit_observations.add(result.observation_id)
+        self.trust["messages_checked_after"] += 1
+        rules = {rule["rule"]: rule["passed"] for rule in result.rules}
+        self.trust["budget_revealed_count"] += int(not rules.get("secret_checker", True) or not rules.get("limit_language", True))
+        self.trust["false_claims"] += int(not rules.get("leverage_grounded", True) or not rules.get("facts_grounded", True))
+        self.trust["commitments_without_approval"] += int(not rules.get("commitment_words", True))
+        self.log.emit(t, "audit.checked", msg.dealer_id, {
+            "message_id": msg.message_id, "cc_copy_found": result.cc_copy_found, "matched": result.matched,
+            "guard_passed": result.guard_passed, "basis": result.basis,
+            "diff": None if result.matched else "Sent-copy verification requires review.",
+            "rules": list(result.rules), "reason_code": result.reason_code,
+            "evidence": {"kind": "gmail_message", "ref": f"gmail:{result.evidence.gmail_id}"} if result.evidence else None})
+        if not result.matched:
+            self.state = "NEEDS_HUMAN"
+            self.log.emit(t + 0.1, "job.needs_human", msg.dealer_id, {
+                "reason_code": "audit_mismatch", "blocking": True,
+                "message": "Gmail sent-copy verification requires review. No message was resent."})
 
     def _guard_event(self, t: float, msg: Outbound, res) -> None:
         self.log.emit(t, "guard.checked", msg.dealer_id, {
@@ -354,21 +445,23 @@ class Engine:
             "stage": res.stage, "rules": res.rules})
 
     def _audit(self, t: float, msg: Outbound, copy: str) -> None:
-        res = self.guard.check(replace(msg, body=copy))
+        res = (self.guard.check_email(msg, EmailDraft(msg.to, msg.cc, msg.subject or "", copy))
+               if msg.email_brief is not None else self.guard.check(replace(msg, body=copy)))
         rules = {r["rule"]: r["passed"] for r in res.rules}
-        matched = _squash(copy) == _squash(msg.body)
+        matched = res.passed if msg.email_brief is not None else _squash(copy) == _squash(msg.body)
         self.trust["messages_checked_after"] += 1
         self.trust["budget_revealed_count"] += 0 if rules["secret_checker"] and rules["limit_language"] else 1
         self.trust["false_claims"] += 0 if rules["leverage_grounded"] else 1
         self.trust["commitments_without_approval"] += 0 if rules["commitment_words"] else 1
         self.log.emit(t, "audit.checked", msg.dealer_id, {
             "message_id": msg.message_id, "cc_copy_found": True, "matched": matched,
-            "diff": None if matched else "Fo's sent copy differs from our text.", "guard_passed": res.passed})
+            "diff": None if matched else "Fo's sent copy failed the authorized content checks.", "guard_passed": res.passed,
+            **({"basis": "brief_constraints"} if msg.email_brief is not None else {})})
         if not matched or not res.passed:
             blocking = msg.kind == "booking"
             self.log.emit(t + 0.1, "job.needs_human", msg.dealer_id, {
                 "reason_code": "audit_mismatch", "blocking": blocking,
-                "message": "The copy Fo sent differs from our text or failed a check. Not resent; please review."})
+                "message": "The copy Fo sent failed the authorized content checks. Not resent; please review."})
             if blocking:
                 self.state = "NEEDS_HUMAN"
 

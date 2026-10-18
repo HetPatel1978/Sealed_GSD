@@ -1,7 +1,14 @@
 # Fo adapter: validation and controlled live acceptance
 
-The adapter implementation is tested locally. An approved live email through this adapter is still
-required to complete step 2's acceptance check. Earlier spike sends used a different path.
+**Current email contract:** new job emails use [Fo-composed drafts from briefs](fo_briefs.md)
+(decision 16). The smoke command below deliberately remains the legacy exact-text test; its
+recorded payload and review marker are unchanged. New brief-based emails require a checked
+draft before confirmation and permit compliant wording/signature changes. A controlled $90
+counter-reply passed live draft review and Gmail sent-copy auditing on October 18, 2026.
+
+The adapter implementation is tested locally and a legacy controlled send was verified in Gmail.
+The brief contract has also passed the controlled counter-reply acceptance below. [Sent-copy auditing](sent_audit.md) is now
+implemented, including an adapter callback that retains the account reservation until verification.
 
 On October 18, 2026, live read-only validation passed: OAuth authentication, two consecutive
 `list_fo_conversations` calls through the same client, and clean session shutdown. The check printed
@@ -11,8 +18,9 @@ The first approved live email was sent to `hfp5252@psu.edu` using run `smoke_01`
 "Sent, exactly as written"; the classifier now accepts the comma after "Sent". A read-only Gmail
 check confirmed the requested recipient, CC and subject and found the requested body intact plus
 Fo's appended signature and social links. The stored outcome is sent with `audit_mismatch`, and
-the active review marker is retained. Nothing was resent. Automatic handling of actual sent-copy
-differences is part of step 3; this run does not pass a strict verbatim-body audit.
+the original audit warning is retained as history. After the user approved resolving that specific
+signature-only difference, its active account pause was released without changing the sent record
+or audit evidence. Nothing was resent. This run still does not pass a strict verbatim-body audit.
 
 ## Local verification
 
@@ -71,3 +79,34 @@ in this smoke command.
   run IDs to force a resend.
 - Nonempty unscoped legacy files are rejected unchanged. They need explicit review rather than a
   guessed migration that might duplicate an earlier send.
+
+## New brief-mode acceptance
+
+Use `python -m sealed.fo.brief_smoke --to consenting-teammate@example.org` for a dry run.
+It supplies a controlled-test brief, not the legacy exact email above. After explicit approval,
+`--yes-send` checks Gmail connectivity before sending and automatically audits the actual copy.
+An existing review marker prevents sending; this command never clears it. `--audit-only` checks
+a recorded brief attempt without a Fo call or resend. See `docs/sent_audit.md` for full behavior.
+
+## Controlled counter-reply demonstration
+
+`python -m sealed.fo.bargain_smoke --target 90` rereads the latest authenticated reply in the
+original test conversation. It supports only the reviewed $100 sample, rejects changed or expired
+terms, validates that quote in the real ledger, and runs the real round-two strategy. With a public
+target of $90 and no competing quote, the resulting action is a $90 counter. This is reviewed sample
+extraction; the general quote parser and automatic engine delivery remain unfinished.
+
+After the user authorizes that counter, `--yes-send` asks Fo to compose its wording from the public
+brief and checks the full draft before confirmation. The incoming RFC Message-ID and Gmail thread
+are bound into the outbound fingerprint. The actual Gmail copy must pass the content/routing checks,
+reply to that Message-ID and remain in that thread. No booking or payment is authorized. The trace
+is saved locally in gitignored `.sealed/bargain_smoke_01.json`; repeated attempts never resend.
+
+Live acceptance passed on October 18, 2026: one counteroffer was delivered to the consenting test
+recipient with the owner on CC, in the original Gmail thread and linked to the authenticated $100
+reply. Fo composed the $90 request; all 26 actual-copy rules passed, including sender authentication,
+price roles and absence of commitments. Earlier drafts were canceled before send approval and
+reconciled using explicit Fo cancellation plus zero Gmail copies; their records remain intact.
+The successful trace is `.sealed/bargain_revision_03.json`. The account has no active review pause.
+Backend validation: 354 tests. This controlled demonstration does not complete the general parser,
+automatic engine delivery or live job coordinator.

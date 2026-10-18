@@ -2,6 +2,6 @@
 
 export type DataSource = 'mock' | 'live'
 
-export const DATA_SOURCE: DataSource = import.meta.env.VITE_DATA_SOURCE === 'live' ? 'live' : 'mock'
+export const DATA_SOURCE: DataSource = import.meta.env.VITE_DATA_SOURCE === 'mock' ? 'mock' : 'live'
 
 export const API_BASE: string = import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000'

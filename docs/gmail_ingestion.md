@@ -91,8 +91,9 @@ through the ready-record API and never become ready just because of a repoll.
 
 ## Remaining in step 3
 
-1. Replace the manual live sent-copy check with reusable auditing and real sent
-   metadata; preserve the current Fo signature mismatch for review.
+1. Reusable [sent-copy auditing](sent_audit.md) and passed-copy reply bindings are
+   implemented. The legacy email passed routing/authentication checks and retained
+   its exact-body warning. New brief-mode live acceptance still needs approval.
 2. Add the isolated quote parser and deterministic validation.
 3. Consume staged replies idempotently into the engine with real evidence,
    subject, authentication and timestamps; exercise the sample reply end to end.

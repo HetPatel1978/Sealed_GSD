@@ -1,6 +1,6 @@
 # Sealed
 
-Sealed is a negotiation agent built on Wajo's Fo. You describe a job (what, how many, by when), set a target price and a secret ceiling, and either list a few sellers or let Sealed find dealers within 20 miles of your ZIP and pick from its suggestions. Fo emails each seller from your Wajo account, Sealed reads their replies from your inbox, counters using only true facts (real written quotes, never invented leverage), and asks you to approve the winning deal before anything is booked. The ceiling is never sent to Fo, to any seller, or to any LLM, and every outgoing message is checked before and after it is sent. You can see your own target and ceiling on the dashboard; the ceiling reaches it through one private endpoint and never appears in the event stream.
+Sealed is a negotiation agent built on Wajo's Fo. You describe a job (what, how many, by when), set a target price and a secret ceiling, and either list a few sellers or let Sealed find dealers within 20 miles of your ZIP and pick from its suggestions. Sealed supplies an outreach brief with verified facts and permitted prices; Fo composes emails and handles phone conversations within it. Sealed validates written replies, controls negotiation actions and asks you to approve the winning deal before anything is booked. The ceiling is never sent to Fo, to any seller, or to any LLM. You can see your own target and ceiling on the dashboard; the ceiling reaches it through one private endpoint and never appears in the event stream.
 
 ## Design
 
@@ -52,11 +52,15 @@ Credentials (Fo OAuth token, Gmail app password, Anthropic key) load from enviro
 
 The Fo adapter's local checks and controlled live email test are documented in [docs/fo_adapter.md](docs/fo_adapter.md). The smoke command is a dry run by default; its state lives in gitignored `.sealed/`.
 
-Read-only Gmail reply staging is available separately; see [docs/gmail_ingestion.md](docs/gmail_ingestion.md) for trusted outreach bindings, durable deduplication and pending replies. Quote parsing and live engine delivery are the next part of build-plan step 3.
+New job emails use [Fo-composed drafts from briefs](docs/fo_briefs.md), checked for routing, permitted prices, price roles and commitments. Safe rewording and ordinary signatures are allowed. This contract is validated offline; the legacy smoke command and its recorded test retain their original exact-text contract.
+
+[Gmail sent-copy auditing](docs/sent_audit.md) now checks actual routing, authentication and full content, with durable observations and an adapter callback. `python -m sealed.fo.brief_smoke --to consenting-teammate@example.org` prepares a controlled brief test without sending; the new live send still requires explicit approval.
+
+Read-only Gmail reply staging is available separately; see [docs/gmail_ingestion.md](docs/gmail_ingestion.md) for trusted outreach bindings, durable deduplication and pending replies. The [isolated quote parser](docs/quote_parser.md) extracts and validates seller terms with a durable cache. [Durable engine delivery](docs/reply_delivery.md) now commits reply effects and guarded outreach intents before acknowledging inbox items. The [background coordinator](docs/coordinator.md) now connects polling, authorized extraction, durable timers and guarded dispatch; its complete offline demo includes approval, written confirmation and restart replay. The [dashboard and job API](docs/dashboard.md) now provide job intake, streamed activity, approval controls and receipts. The [Fo dealer picker](docs/dealer_discovery.md) supports public research and checked selections before job creation. Reviewed reconciliation remains.
 
 ## Frontend
 
-Build against `docs/api.md`. Until the backend streams real events, replay `mock/events.json` and use `mock/ceiling.json` and `mock/discovery.json` as the responses of `GET /jobs/{id}/ceiling` and `POST /dealers/discover`.
+Start the API with `SEALED_MODE=sim`, then run `npm run dev` in `frontend/` and open `http://localhost:3000`. The dashboard defaults to the backend and can complete a synthetic negotiation through explicit approval and written confirmation without live requests. See [startup and live-mode permissions](docs/dashboard.md). `VITE_DATA_SOURCE=mock` selects a read-only recorded preview.
 
 ## Mock data
 

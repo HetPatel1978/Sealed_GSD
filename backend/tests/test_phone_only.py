@@ -7,6 +7,7 @@ from sealed.core.models import Dealer, Inbound, ParsedReply
 from sealed.sim.dealers import Response, SimDealer
 from sealed.sim.run import default_dealers, default_job, run
 from tests.helpers import FakeChecker
+from sealed.sim.email import compose
 
 PENN_ADDR = "sales@penn-motors.example"
 
@@ -76,7 +77,8 @@ def test_job_created_lists_phone_only_dealers_with_their_source():
 def phone_engine():
     class Transport:
         def send(self, now, msg, approve_preview):
-            return SendResult(True, now, sent_copy=msg.body if msg.channel == "email" else None)
+            draft = compose(msg) if msg.channel == "email" else None
+            return SendResult(True, now, sent_copy=draft.body if draft else None, draft=draft)
 
     job = replace(default_job(), dealers=(Dealer("p", "Penn Motors", None, "+1-555-0198"),
                                          Dealer("q", "Quiet Auto", None, "+1-555-0197")))

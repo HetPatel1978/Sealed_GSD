@@ -1,6 +1,6 @@
-"""Message builder: fixed templates in Fo's voice. Every email has two parts: the instruction we give Fo
-(`fo_instruction`) and the exact text the dealer reads (`email_body`). Calls get a sealed brief: a goal,
-the only facts Fo may use, and fixed hard limits; Fo runs the conversation in its own words.
+"""Build public email/call briefs; Fo composes the actual outreach in its own words.
+
+Legacy exact-email helpers remain for recorded smoke sends and regression checks.
 
 No LLM. Inputs are the job, the decision and ledger values only; there is no ceiling parameter.
 Fo refuses to send text written as the user (spike 1b), so everything says "I'm Fo, an AI assistant".
@@ -9,7 +9,7 @@ Fo refuses to send text written as the user (spike 1b), so everything says "I'm 
 import secrets
 from dataclasses import dataclass
 
-from sealed.core.models import Decision, Job, Outbound
+from sealed.core.models import Decision, EmailBrief, Job, Outbound
 
 TAG_PREFIX = "SEALED-"
 BODY_START = "<<<EMAIL_BODY"
@@ -36,6 +36,64 @@ SAFETY_PHRASES = (
     NO_PAYMENT_BY_EMAIL,
     CALL_LIMITS,
 )
+
+EMAIL_LIMITS = (
+    "Rules for this email:\n"
+    "- Write as Fo, openly identifying yourself as an AI assistant acting for the buyer.\n"
+    "- Use only the supplied facts and price roles. Do not invent quotes, availability, services or deadlines.\n"
+    "- You may choose natural wording, greeting and a brief ordinary signature.\n"
+    "- Do not discuss spending limits, invent leverage, or introduce any other monetary amount.\n"
+    "- Do not agree to, reserve, order, sign, pay, or arrange deposits or payment details.\n"
+    "- For an explicitly approved booking only, request purchase paperwork at the approved total.\n"
+    "- Ask for a written reply and reply-all. Do not contact anyone else or schedule follow-ups.\n"
+    "- Draft only first. Do not send until Sealed confirms this specific draft. Send it only once."
+)
+
+EMAIL_GOALS = {
+    "rfq": "Ask for a written out-the-door total including all fees, taxes and add-ons, availability and quote validity.",
+    "firm_up": "Ask for the missing written out-the-door total including all fees, taxes and add-ons, availability and quote validity.",
+    "price_match": "State the verified lowest competing written total and ask for a revised written out-the-door total.",
+    "counter": "Ask whether this dealer can meet the permitted offer as a written out-the-door total.",
+    "booking": "Request purchase paperwork at the explicitly approved written total for this exact car. No payment is being made by email.",
+    "cancel": "Politely decline this dealer's quote; the buyer chose another dealer. Make no further promises.",
+}
+
+
+def render_email_brief(kind: str, brief: EmailBrief) -> str:
+    facts = [f"- Buyer's first name: {brief.buyer}", f"- Exact car: {brief.spec}",
+             f"- Buyer's ZIP: {brief.zip}", f"- True timeline: {brief.timeline}",
+             f"- Currency: {brief.currency}"]
+    for label, value in (("Dealer's own verified written total", brief.own_price),
+                         ("Lowest competing verified written total", brief.competing_price),
+                         ("Only permitted offer", brief.offer),
+                         ("User-approved written total for paperwork", brief.approved_price)):
+        if value is not None:
+            facts.append(f"- {label}: {money(value)} {brief.currency}")
+    return (f"Goal: {EMAIL_GOALS[kind]}\n\nAllowed facts:\n" + "\n".join(facts)
+            + f'\n\nIdentity: "{DISCLOSURE}" on behalf of {brief.buyer}.\n\n' + EMAIL_LIMITS)
+
+
+def wrap_email_brief_for_fo(to: str, cc: str, subject: str, brief: str,
+                           reply_to_message_id: str | None = None) -> str:
+    threading = (f"Reply to the existing incoming email with Message-ID {reply_to_message_id}. "
+                 "Use the existing email thread and set In-Reply-To to that Message-ID; do not create a new thread.\n\n"
+                 if reply_to_message_id else "")
+    return (
+        "Compose one email in your own words using the brief below. This is a DRAFT request, not permission to send.\n\n"
+        + threading +
+        f"To: {to}\nCC: {cc}\nSubject (keep exactly): {subject}\n\n"
+        f"<<<EMAIL_BRIEF\n{brief}\nEMAIL_BRIEF>>>\n\n"
+        "Return the full draft in this exact envelope, followed by 'Good to send?':\n"
+        "<<<EMAIL_DRAFT\nTo: [specified recipient]\nCC: [specified CC]\nSubject: [specified subject]\n"
+        "Body:\n[your composed email]\nEMAIL_DRAFT>>>\n"
+        "Keep the car specification verbatim. Keep monetary amounts as digits with the supplied currency. "
+        "State each quote or offer in a separate sentence with its role clear. "
+        "Use only this brief's facts, even when earlier conversation messages contain additional dates or terms. "
+        "For a quote request, ask for a written reply with the total; avoid confirmation, agreement, order or "
+        "payment language, including in disclaimers. If needed, use exactly: No payment is being made by email. "
+        "Close the envelope with the literal line EMAIL_DRAFT>>> including all three greater-than characters. "
+        "Do not send, schedule reminders, reply again, call, or take any other action without a separate instruction."
+    )
 
 
 def money(x: float) -> str:
@@ -178,7 +236,7 @@ def number_provenance(msg: Outbound, job: Job) -> list[dict]:
 
 
 def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_price: float | None = None,
-          email_to: str | None = None) -> Outbound:
+          email_to: str | None = None, *, email_mode: str = "brief") -> Outbound:
     """`email_to` overrides the dealer's email with a phone-only address attributed by trusted ingestion."""
     dealer = job.dealer(d.dealer_id)
     to = email_to or dealer.email
@@ -192,12 +250,17 @@ def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_pr
                         job_id=job.id, run_id=job.run_id)
     if not to:
         raise ValueError(f"no email address for dealer {dealer.id}")
-    body = email_body(job, d, dealer.name, approved_price)
+    if email_mode not in {"brief", "exact"}:
+        raise ValueError("Unknown email mode.")
+    brief = EmailBrief(job.buyer, job.details, job.zip, job.timeline, job.currency,
+                       d.own_price, d.cited_price, d.offer, approved_price) if email_mode == "brief" else None
+    body = render_email_brief(d.kind, brief) if brief else email_body(job, d, dealer.name, approved_price)
     subject = subject_for(job, tag, d.kind)
     return Outbound(message_id, d.dealer_id, d.kind, "email", d.round, to, subject, body,
-                    wrap_for_fo(to, cc, subject, body), d.offer, d.cited_quote_id, frozenset(allowed),
+                    (wrap_email_brief_for_fo if brief else wrap_for_fo)(to, cc, subject, body),
+                    d.offer, d.cited_quote_id, frozenset(allowed),
                     booking_approved=d.kind == "booking" and approved_price is not None, price_sources=sources,
-                    cc=cc, dealer_name=dealer.name, job_id=job.id, run_id=job.run_id)
+                    cc=cc, dealer_name=dealer.name, job_id=job.id, run_id=job.run_id, email_brief=brief)
 
 
 # --- Legacy (spike 1b only): first-person text signed by the user. Fo refuses to send this. -------------

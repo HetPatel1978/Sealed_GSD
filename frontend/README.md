@@ -14,16 +14,21 @@ npm run build      # type-check + production build into dist/
 npm run lint
 ```
 
-Settings: copy `.env.example` to `.env.local` (gitignored). `VITE_DATA_SOURCE=mock` replays `../mock/*.json`; `live` talks to the backend at `VITE_API_BASE` (start it with `python -m app.run` in `backend/`). Only `VITE_*` values reach the browser, so never put secrets there.
+Settings: copy `.env.example` to `.env.local` (gitignored). `VITE_DATA_SOURCE=live` (default) talks to the backend; `mock` shows the read-only recorded activity preview. The API defaults to simulation, so using the API does not by itself authorize real outreach. The backend is at `VITE_API_BASE` (start it with `python -m app.run` in `backend/`). Only `VITE_*` values reach the browser, so never put secrets there.
 
-Layout: `src/config.ts` (settings), `src/App.tsx` (placeholder that checks `/health`; replaced by the real screens), `vite.config.ts` (port 3000, `@mock` alias for `../mock`).
+Layout: `src/config.ts` (settings), `src/App.tsx` (job intake, comparison, event stream, approvals and receipt), `src/api.ts` (typed API client), `vite.config.ts` (port 3000, `@mock` alias for `../mock`).
 
-Build against `../docs/api.md` (v0.3). Until the backend is live:
-- replay `../mock/events.json` as a fake SSE stream,
-- use `../mock/ceiling.json` as the `GET /jobs/{id}/ceiling` response,
-- use `../mock/discovery.json` as the `POST /dealers/discover` response.
+See [dashboard startup and limits](../docs/dashboard.md) and the [API contract](../docs/api.md).
+The dashboard creates jobs, streams coordinator events through SSE, displays written
+quotes and trust checks, echoes exact proposal terms on approval, and shows the
+final evidence receipt. It can restore a private ceiling after backend restart.
+Live job start requires explicit reply-processing and outreach permission; calls
+require a separate permission. The simulation advance action stops for approval.
 
-Screens: job intake (car, ZIP, target, ceiling), dealer picker (discovered suggestions within 20 miles, or typed in; up to 5), target + ceiling display, live dealer view with a live/sim label on every event, trust counter, approval gate (echo the exact terms), receipt.
+The **Find dealers** panel supports Fo-first public research, progress polling,
+checked contacts and selection before job creation. Simulation uses synthetic
+candidates. Live research has its own permission checkbox. See
+[dealer discovery and limitations](../docs/dealer_discovery.md).
 
 Ceiling rules for the dashboard:
 - Fetch it only from `GET /jobs/{id}/ceiling`. Keep it in memory; never put it in a URL, `localStorage`, analytics, logs or any other request.

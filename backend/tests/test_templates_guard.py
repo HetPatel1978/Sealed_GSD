@@ -21,7 +21,7 @@ DECISIONS = [
 
 
 def build(d, price=None):
-    return messages.build(J, d, "m_01", "SEALED-TEST0001", "buyer@example.com", approved_price=price)
+    return messages.build(J, d, "m_01", "SEALED-TEST0001", "buyer@example.com", approved_price=price, email_mode="exact")
 
 
 @pytest.mark.parametrize("d", DECISIONS, ids=lambda d: f"{d.kind}-{d.channel}")
@@ -125,7 +125,7 @@ def test_counter_and_booking_preserve_cents_and_pass_the_guard():
 
 def test_routing_addresses_are_not_mistaken_for_commitments():
     j = replace(J, dealers=(replace(J.dealers[0], email="orders@alpha.example"),))
-    msg = messages.build(j, DECISIONS[0], "m_01", "TAG", "signups@buyer.example")
+    msg = messages.build(j, DECISIONS[0], "m_01", "TAG", "signups@buyer.example", email_mode="exact")
     preview = f"To: {msg.to}\nCC: {msg.cc}\nSubject: {msg.subject}\nBody: {msg.body}\nGood to send?"
     assert Guard(FakeChecker()).check(msg).passed
     assert Guard(FakeChecker()).check(msg, preview=preview).passed

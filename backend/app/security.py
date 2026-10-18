@@ -61,3 +61,22 @@ class LoopbackOnly(BaseHTTPMiddleware):
 
 
 ALLOWED_HOST_HEADERS = ["127.0.0.1", "localhost", "[::1]"]
+
+
+class DashboardRequests(BaseHTTPMiddleware):
+    """CORS alone cannot stop cross-site writes to an unauthenticated local API."""
+
+    def __init__(self, app, *, origin):
+        super().__init__(app)
+        self.origin = origin
+
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin")
+        if (origin is not None and origin != self.origin) or (origin is None and request.headers.get("sec-fetch-site") == "cross-site"):
+            return JSONResponse({"error": "dashboard_origin_required"}, status_code=403)
+        if request.method == "POST" and request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
+            return JSONResponse({"error": "json_required"}, status_code=415)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response

@@ -19,13 +19,18 @@ def total_grounded(inbound: Inbound) -> bool:
             and p.price_total > 0 and p.price_total in numbers_in(inbound.text))
 
 
+def written_order(value: Quote) -> tuple[float, int]:
+    evidence = value.mail_evidence
+    return (value.received_at, int(evidence.gmail_id) if evidence and evidence.gmail_id.isdigit() else 0)
+
+
 def latest_written(quotes: list[Quote]) -> list[Quote]:
     """Latest sender-verified email per dealer, including withdrawals and non-firm revisions."""
     latest: dict[str, Quote] = {}
     for q in quotes:
         if q.source == "email" and q.verified:
             prior = latest.get(q.dealer_id)
-            if prior is None or q.received_at >= prior.received_at:
+            if prior is None or written_order(q) >= written_order(prior):
                 latest[q.dealer_id] = q
     return list(latest.values())
 
@@ -59,6 +64,7 @@ class Ledger:
             hedge_words=tuple(p.hedge_words), declined=p.declined, suspicious=p.suspicious, received_at=now,
             breakdown=clean, breakdown_flags=tuple(flags), verified=self.verified_sender(inbound),
             numbers_grounded=total_grounded(inbound),
+            mail_evidence=inbound.mail_evidence,
         )
         self.quotes.append(q)
         return q

@@ -35,6 +35,11 @@ class InboxStore:
                                (account.lower(), status))
         return [json.loads(row[0]) for row in rows]
 
+    def get(self, account: str, gmail_id: str) -> tuple[str, dict] | None:
+        row = self.db.execute("SELECT status, record FROM inbox WHERE account=? AND gmail_id=?",
+                             (account.lower(), gmail_id)).fetchone()
+        return (row[0], json.loads(row[1])) if row else None
+
     def acknowledge(self, account: str, gmail_id: str) -> bool:
         with self.db:
             cursor = self.db.execute("UPDATE inbox SET status='consumed' WHERE account=? AND gmail_id=? AND status='ready'",

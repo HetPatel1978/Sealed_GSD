@@ -5,8 +5,9 @@ Rules (docs/architecture.md §7, spikes 1a-1d):
 - Serial queue: one ask_fo turn at a time for the account, across all transports in this process.
 - Never resend. A message id is recorded as `pending` BEFORE ask_fo; on a timeout or "working" we poll
   get_fo_reply; a message already pending/sent/unclear is never sent again (a human checks it).
-- Fo may answer with a preview/confirmation question: the guard checks it (approve_preview) and we answer
-  "yes" only if it passes; otherwise we tell Fo not to send.
+- Brief-mode email asks Fo to compose a full draft before sending. The guard checks routing, prices and
+  constraints; the draft is durable before confirmation. A send without a checked draft raises review.
+- Legacy exact-email and call previews retain their original checks; nothing is automatically resent.
 - Fo may refuse (spike 1b) or reply ambiguously: not counted as sent; raises needs_human.
 - If Fo mentions payment, purchase or an order, we stop the turn and flag it.
 
@@ -14,26 +15,31 @@ Use one process and one state file per Fo account. Unresolved or flagged turns k
 across restarts and require review before another send. See docs/fo_adapter.md for live acceptance.
 """
 
-import hashlib
 import json
 import os
 import re
 import tempfile
 import threading
 import time
+from dataclasses import asdict
+from datetime import datetime, timezone
 from math import isfinite
 from pathlib import Path
 from typing import Callable
 
 from sealed.core.engine import SendResult
-from sealed.core.models import Outbound
+from sealed.core.models import EmailAudit, EmailDraft, Outbound, outbound_fingerprint
+from sealed.core.email_policy import EXTRA_ACTION, parse_draft, payment_text, review_rules
+from sealed.core.guard import payload_intact
 from sealed.fo.client import FoClient, FoTimeout
 
 POLL_LIMIT_S = 600
 # One adapter process and one state file per Fo account. All instances in this process share the queue.
-_TURN_LOCK = threading.Lock()
+_TURN_LOCK = threading.RLock()
 CONFIRM_YES = "Yes, send it exactly as written."
 CONFIRM_YES_CALL = "Yes, place the call exactly as described."
+CONFIRM_BRIEF = ("Yes, send that reviewed draft once with exactly the displayed recipient, CC, subject and body. "
+                 "Do not send any other messages, arrange payments, call or schedule follow-ups.")
 CONFIRM_NO = "No, please don't send or do anything for this request. I'll follow up."
 
 DONE = re.compile(r"^\s*(sent(?=$|[.!,]|\s+(to|from|via|the|it)\b)|done(?=$|[.!])|"
@@ -120,22 +126,23 @@ class Store:
 class FoTransport:
     def __init__(self, client: FoClient, store_path: Path, poll_limit_s: float = POLL_LIMIT_S,
                  clock: Callable[[], float] = time.monotonic, wait_seconds: int = 40,
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], None] = time.sleep,
+                 sent_auditor: Callable[[Outbound, str], EmailAudit] | None = None):
         if not isfinite(poll_limit_s) or poll_limit_s <= 0 or not 0 <= wait_seconds <= 40:
             raise ValueError("Use a positive poll limit and wait_seconds between 0 and 40.")
         self.client, self.store = client, Store(store_path)
         self.poll_limit_s, self.clock, self.wait_seconds = poll_limit_s, clock, wait_seconds
         self.sleep = sleep
+        self.sent_auditor = sent_auditor
         self.transcript: list[dict] = []     # every raw Fo result, for logs and debugging
 
     def send(self, now: float, msg: Outbound, approve_preview: Callable[[str], bool]) -> SendResult:
         if not msg.job_id or not msg.run_id:
             raise ValueError("A live Fo message requires job_id and run_id.")
+        if msg.email_brief is not None and not payload_intact(msg):
+            return SendResult(False, now, reason_code="guard_blocked")
         key = Store.key(msg.job_id, msg.run_id, msg.message_id)
-        fingerprint = hashlib.sha256(json.dumps([
-            msg.dealer_id, msg.kind, msg.channel, msg.round, msg.to, msg.subject, msg.body,
-            msg.fo_instruction, msg.booking_approved,
-        ]).encode("utf-8")).hexdigest()
+        fingerprint = outbound_fingerprint(msg)
         with _TURN_LOCK:
             # A second transport instance may have changed this file while this one waited.
             self.store.reload()
@@ -148,7 +155,9 @@ class FoTransport:
                     "message": "This message was already attempted; not sent again." if same else
                                "This message ID was used for a different payload; nothing was sent.",
                 }], reason_code=(prior.get("reason_code") if same and prior["status"] == "sent" else "send_unclear"),
-                    note=prior.get("fo_reply"))
+                    note=prior.get("fo_reply"),
+                    draft=EmailDraft(**prior["draft"]) if same and prior.get("draft") else None,
+                    audit=EmailAudit.from_dict(prior["audit"]) if same and prior.get("audit") else None)
             if self.store.data["active"]:
                 return SendResult(False, now, reason_code="send_unclear", errors=[{
                     "code": "fo_turn_unresolved", "retryable": False, "resent": False,
@@ -158,10 +167,12 @@ class FoTransport:
             errors: list[dict] = []
             cid = self.store.conversation(msg)
             reserved = False
+            reviewed_draft = None
+            attempted_at = datetime.now(timezone.utc).isoformat()
             try:
                 # Reservation and active-turn marker are durable before the first non-idempotent call.
                 self.store.set_status(key, "pending", active=True, fingerprint=fingerprint,
-                                      dealer_id=msg.dealer_id, channel=msg.channel)
+                                      dealer_id=msg.dealer_id, channel=msg.channel, attempted_at=attempted_at)
                 reserved = True
 
                 def remember(res: dict) -> str | None:
@@ -181,15 +192,27 @@ class FoTransport:
 
                 res = turn(msg.fo_instruction)
                 outcome, text = self._outcome(res)
+                if msg.email_brief is not None and parse_draft(text) is not None:
+                    outcome = "question"
                 reason_override = None
                 risky = self._money_mention(text, msg)
                 if outcome == "question":
                     approved = approve_preview(text)
+                    candidate_draft = parse_draft(text) if msg.email_brief is not None else None
+                    if msg.email_brief is not None:
+                        approved = approved and candidate_draft is not None and all(
+                            rule["passed"] for rule in review_rules(msg, candidate_draft))
                     if not cid:
                         # A timeout may lose the ID. Polling can discover it; a new ask must never guess it.
                         outcome = "unclear"
                     elif approved and not risky:
-                        res = turn(CONFIRM_YES_CALL if msg.channel == "call" else CONFIRM_YES)
+                        if candidate_draft is not None:
+                            # The exact reviewed artifact is durable BEFORE permission to send.
+                            self.store.set_status(key, "pending", active=True, draft=asdict(candidate_draft))
+                            reviewed_draft = candidate_draft
+                        confirmation = CONFIRM_BRIEF if msg.email_brief is not None else (
+                            CONFIRM_YES_CALL if msg.channel == "call" else CONFIRM_YES)
+                        res = turn(confirmation)
                         outcome, text = self._outcome(res)
                         if outcome == "question":
                             outcome = "unclear"
@@ -205,6 +228,14 @@ class FoTransport:
                             outcome = "still_working" if cancelled == "still_working" else "unclear"
                 if outcome == "sent" and not cid:
                     reason_override = "send_unclear"
+                if outcome == "sent" and msg.email_brief is not None and reviewed_draft is None and reason_override is None:
+                    reason_override = "audit_mismatch"
+                    errors.append({"code": "fo_sent_without_reviewed_draft", "retryable": False, "resent": False,
+                                   "message": "Fo reported sending before draft review. Not resent; check Gmail."})
+                if outcome == "sent" and msg.email_brief is not None and EXTRA_ACTION.search(text):
+                    reason_override = "audit_mismatch"
+                    errors.append({"code": "fo_action_outside_brief", "retryable": False, "resent": False,
+                                   "message": "Fo reported activity outside the single authorized email; review the conversation."})
                 if risky or self._money_mention(text, msg):
                     errors.append({"code": "fo_mentions_payment", "retryable": False, "resent": False,
                                    "message": "Fo mentioned a payment, purchase or order. Stopped; please review."})
@@ -217,13 +248,31 @@ class FoTransport:
                     "refused": "fo_refused", "preview_rejected": "audit_mismatch", "failed": "fo_failed",
                     "stopped": "payment_mention",
                 }.get(outcome, "send_unclear")
+                audit = None
+                if sent and msg.channel == "email" and self.sent_auditor is not None:
+                    # Keep the account locked and the sent reservation active while
+                    # reading Gmail. A crash here preserves "sent", never "retry".
+                    self.store.set_status(key, "sent", active=True, conversation=cid,
+                                          reason_code=reason or "send_unclear", fo_reply=text[:500], audit_pending=True)
+                    try:
+                        audit = self.sent_auditor(msg, attempted_at)
+                        if not audit.validates(msg):
+                            raise ValueError("Wrong outbound audit result")
+                        if not audit.matched:
+                            reason = reason or ("send_unclear" if audit.state == "pending" else "audit_mismatch")
+                    except Exception:
+                        audit = None
+                        reason = reason or "audit_mismatch"
+                        errors.append({"code": "gmail_audit_failed", "retryable": True, "resent": False,
+                                       "message": "The email was reported sent, but Gmail auditing failed. Paused for review; do not resend."})
                 self.store.set_status(key, "sent" if sent else outcome,
-                                      active=outcome in ("still_working", "unclear") or reason_override is not None,
+                                      active=outcome in ("still_working", "unclear") or reason_override is not None or (sent and reason is not None),
                                       conversation=cid,
-                                      reason_code=reason, fo_reply=text[:500])
-                # Gmail ingestion supplies the real sent copy for the post-send audit (step 3).
+                                      reason_code=reason, fo_reply=text[:500],
+                                      **({"audit": asdict(audit), "audit_pending": audit.state == "pending"} if audit else {}))
+                # A configured Gmail auditor supplies actual evidence, never a Fo self-report.
                 return SendResult(sent, now + (self.clock() - t0) / 60, errors=errors,
-                                  reason_code=reason, note=text)
+                                  reason_code=reason, note=text, draft=reviewed_draft, audit=audit)
             except Exception:
                 # Never echo raw SDK/HTTP exceptions: they can include tokens or request contents.
                 if reserved:
@@ -267,6 +316,8 @@ class FoTransport:
 
     @staticmethod
     def _money_mention(text: str, msg: Outbound) -> bool:
+        if msg.email_brief is not None:
+            return bool(MONEY_ACTION.search(payment_text(text, booking=msg.booking_approved)))
         # A verbatim approved booking preview contains "purchase paperwork" and an explicit no-payment line.
         # Only that exact known body is exempt; added payment instructions still stop before confirmation.
         normalized = re.sub(r"\s+", " ", text).strip()

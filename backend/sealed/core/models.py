@@ -1,6 +1,8 @@
 """Plain data types shared by the core. Note: Job has no ceiling field, on purpose (see sealed.private.vault)."""
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,8 @@ class Inbound:
     turns: tuple[dict, ...] = ()      # call transcript turns ({"role": "assistant"|"user", "text": ...})
     contact_verified: bool = False    # trusted ingestion confirmed this sender belongs to a phone-only dealer;
                                       # never supplied by the quote parser
+    mail_evidence: "MailEvidence | None" = None  # trusted Gmail metadata, never parser output
+    subject: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,7 @@ class Quote:
     breakdown_flags: tuple[str, ...] = ()
     verified: bool = False            # sender matches this job's configured dealer address
     numbers_grounded: bool = False   # code checked the total against the dealer's text
+    mail_evidence: "MailEvidence | None" = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,28 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class EmailBrief:
+    """Public facts and price roles for one Fo-composed email. Never contains a ceiling."""
+    buyer: str
+    spec: str
+    zip: str
+    timeline: str
+    currency: str = "USD"
+    own_price: float | None = None
+    competing_price: float | None = None
+    offer: float | None = None
+    approved_price: float | None = None
+
+
+@dataclass(frozen=True)
+class EmailDraft:
+    to: str
+    cc: str
+    subject: str
+    body: str
+
+
+@dataclass(frozen=True)
 class Outbound:
     message_id: str
     dealer_id: str
@@ -118,7 +145,7 @@ class Outbound:
     round: int
     to: str
     subject: str | None
-    body: str                         # exact email body, or the call script
+    body: str                         # email brief, legacy exact email, or call brief (see email_brief)
     fo_instruction: str
     offer: float | None = None
     cited_quote_id: str | None = None
@@ -130,3 +157,62 @@ class Outbound:
     dealer_name: str = ""
     job_id: str = ""
     run_id: str = ""
+    email_brief: EmailBrief | None = None  # None preserves legacy exact-send payloads/replays
+    reply_to_message_id: str | None = None  # actual incoming RFC Message-ID, not an internal ID
+    reply_thread_id: str | None = None      # trusted incoming Gmail thread
+
+
+def outbound_fingerprint(msg: Outbound) -> str:
+    """Stable payload identity; retains fingerprints of existing exact-send records."""
+    parts = [msg.dealer_id, msg.kind, msg.channel, msg.round, msg.to, msg.subject, msg.body,
+             msg.fo_instruction, msg.booking_approved]
+    if msg.email_brief is not None:
+        parts.append(asdict(msg.email_brief))
+    if msg.reply_to_message_id is not None or msg.reply_thread_id is not None:
+        parts.append([msg.reply_to_message_id, msg.reply_thread_id])
+    return hashlib.sha256(json.dumps(parts).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class MailEvidence:
+    gmail_id: str
+    thread_id: str
+    message_id: str
+    received_at: str
+    spf: str
+    dkim: str
+    dmarc: str
+    authentication_source: str
+
+
+@dataclass(frozen=True)
+class EmailAudit:
+    job_id: str
+    run_id: str
+    message_id: str
+    fingerprint: str
+    state: str                        # pending | passed | review
+    reason_code: str | None
+    basis: str                        # brief_constraints | exact_payload
+    cc_copy_found: bool
+    guard_passed: bool
+    rules: tuple[dict, ...]
+    candidate_refs: tuple[str, ...]
+    evidence: MailEvidence | None = None
+
+    @property
+    def matched(self) -> bool:
+        return self.state == "passed"
+
+    @property
+    def observation_id(self) -> str:
+        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
+
+    def validates(self, msg: Outbound) -> bool:
+        return ((self.job_id, self.run_id, self.message_id, self.fingerprint)
+                == (msg.job_id, msg.run_id, msg.message_id, outbound_fingerprint(msg)))
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "EmailAudit":
+        return cls(**{**data, "rules": tuple(data["rules"]), "candidate_refs": tuple(data["candidate_refs"]),
+                      "evidence": MailEvidence(**data["evidence"]) if data.get("evidence") else None})

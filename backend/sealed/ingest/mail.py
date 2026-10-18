@@ -33,9 +33,11 @@ class _HTMLText(HTMLParser):
         self.parts: list[str] = []
         self.stack: list[tuple[str, bool]] = []
         self.strip_quotes = strip_quotes
+        self.links: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
+        self.links.extend(value for key, value in attrs if key in {"href", "src", "action", "background", "poster"} and value)
         quoted = (tag in {"script", "style", "head"} or (self.strip_quotes and (
                   tag == "blockquote" or "gmail_quote" in (attributes.get("class") or "").split()
                   or (attributes.get("id") or "").lower() == "divrplyfwdmsg")))
@@ -108,6 +110,14 @@ class MailMessage:
     dmarc: str
     authenticated: bool
     flags: tuple[str, ...] = ()
+    bcc: tuple[str, ...] = ()
+    reply_to: tuple[str, ...] = ()
+    gmail_labels: tuple[str, ...] = ()  # IMAP metadata, never read from an email header
+    routing_text: str = ""            # decoded header text, including display names, for secret checks
+    audit_texts: tuple[str, ...] = ()  # all inline plain/HTML alternatives, never reply-stripped
+    mime_text: str = ""              # decoded HTML source for private-data checks in attributes
+    html_links: tuple[str, ...] = ()
+    has_attachments: bool = False
 
     @property
     def evidence_ref(self) -> str:
@@ -115,7 +125,7 @@ class MailMessage:
 
 
 def decode_message(raw: bytes, *, gmail_id: str, uid: str, thread_id: str,
-                   received_at: str) -> MailMessage:
+                   received_at: str, gmail_labels: tuple[str, ...] = ()) -> MailMessage:
     message = BytesParser(policy=policy.default).parsebytes(raw)
     senders = addresses([str(v) for v in message.get_all("From", [])])
     flags = []
@@ -127,6 +137,8 @@ def decode_message(raw: bytes, *, gmail_id: str, uid: str, thread_id: str,
         flags.append("invalid_message_id")
     if len(message.get_all("Subject", [])) > 1:
         flags.append("duplicate_subject")
+    if any(len(message.get_all(key, [])) > 1 for key in ("To", "Cc", "Bcc", "Reply-To")):
+        flags.append("duplicate_routing_header")
     auth_headers = message.get_all("Authentication-Results", [])
     auth = str(auth_headers[0]) if auth_headers else ""
     trusted = bool(re.match(r"^\s*mx\.google\.com\s*;", auth, re.I))
@@ -152,12 +164,40 @@ def decode_message(raw: bytes, *, gmail_id: str, uid: str, thread_id: str,
     if len(set(reply_ids)) > 1:
         flags.append("ambiguous_reply_header")
     refs = " ".join(str(v) for v in message.get_all("References", []))
+    audit_texts, html_sources, links = [], [], []
+    attachments = False
+    try:
+        for part in message.walk():
+            if part.get_content_disposition() == "attachment":
+                attachments = True
+                continue
+            if part.get_content_type() not in {"text/plain", "text/html"}:
+                if not part.is_multipart() and part.get_payload(decode=True):
+                    attachments = True  # unapproved inline binary content cannot be text-audited
+                continue
+            text = part.get_content()
+            if not isinstance(text, str):
+                continue
+            if part.get_content_type() == "text/html":
+                html_sources.append(text)
+                rendered = _HTMLText(strip_quotes=False)
+                rendered.feed(text)
+                text = "".join(rendered.parts)
+                links.extend(rendered.links)
+            audit_texts.append(text.replace("\r\n", "\n").replace("\r", "\n"))
+    except (LookupError, ValueError, UnicodeError, RecursionError):
+        flags.append("mime_variant_decode_failed")
     return MailMessage(gmail_id, uid, thread_id, received_at, ids[0] if len(ids) == 1 else "",
                        reply_ids, message_ids(refs), sender,
                        addresses([str(v) for v in message.get_all("To", [])]),
                        addresses([str(v) for v in message.get_all("Cc", [])]),
                        str(message.get("Subject", "")), raw_text, clean,
-                       results["spf"], results["dkim"], results["dmarc"], authenticated, tuple(flags))
+                       results["spf"], results["dkim"], results["dmarc"], authenticated, tuple(flags),
+                       addresses([str(v) for v in message.get_all("Bcc", [])]),
+                       addresses([str(v) for v in message.get_all("Reply-To", [])]), gmail_labels,
+                       "\n".join(f"{key}: {v}" for key in ("From", "To", "Cc", "Bcc", "Reply-To", "Subject")
+                                 for v in message.get_all(key, [])), tuple(audit_texts), "\n".join(html_sources),
+                       tuple(links), attachments)
 
 
 @dataclass(frozen=True)

@@ -97,8 +97,10 @@ def test_mock_checker_accepts_the_sim_stream(tmp_path):
 
 
 def test_only_the_private_zone_and_the_wiring_import_private_modules():
-    # app/main.py is allowed for the GET /jobs/{id}/ceiling route (vault.for_owner) and job wiring.
-    allowed = {BACKEND / "sealed" / "sim" / "run.py", BACKEND / "app" / "main.py"}
+    # Only explicit composition roots may bind private callbacks; service logic may not.
+    # app/main also serves the owner-only ceiling route.
+    allowed = {BACKEND / "sealed" / "sim" / "run.py", BACKEND / "app" / "main.py",
+               BACKEND / "sealed" / "service" / "__main__.py"}
     for py in [*(BACKEND / "sealed").rglob("*.py"), *(BACKEND / "app").rglob("*.py")]:
         if "private" in py.parts or py in allowed:
             continue

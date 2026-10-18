@@ -6,9 +6,20 @@ v0.2 (2026-10-17): additive only. Optional `guard.checked.stage`, `message.sent.
 
 Base URL (local): `http://127.0.0.1:8000`. **Local only:** the server binds to 127.0.0.1, refuses non-loopback clients (`403 {"error": "local_only"}`) and non-local `Host` headers (`400`), and CORS allows exactly one dashboard origin (`SEALED_DASHBOARD_ORIGIN`, default `http://localhost:3000`). This matters because there is no login and `GET /jobs/{id}/ceiling` returns the ceiling. All bodies are JSON, all timestamps ISO 8601 UTC, all money is a number in the job's `currency` (e.g. `372.0`).
 
+## Current implementation (2026-10-18)
+
+Job creation, reads, start, SSE, exact-term approvals, rejection, cancellation,
+receipts and simulation advance are implemented and connected to the dashboard.
+See [dashboard operations](dashboard.md). V1 creates one item (`spec.quantity: 1`)
+and uses exactly two rounds. Background Fo discovery and the dealer picker are now implemented; see [discovery operations](dealer_discovery.md).
+Additional routes: `GET /jobs`, `POST /jobs/{id}/private-runtime` (restore a missing
+ceiling after restart), and `POST /jobs/{id}/allow-calls` (explicitly add permission
+for scheduled calls). The public job view also includes `worker_status` and
+`start_requested`. No live end-to-end coordinator run has been activated for this implementation.
+
 ## The one rule
 
-**The ceiling never leaves the backend except to the user's own dashboard, through one endpoint.** It is accepted on `POST /jobs` and returned only by `GET /jobs/{id}/ceiling`, so the user can see what they set. It is never in `JobView`, any event, the SSE stream, a log line, or an error message, and it is never sent to Fo, any dealer, or any LLM. The backend returns nothing derived from it (no "gap to budget", no "within budget" flag, no percentage of it); if the dashboard wants to show "best quote vs your ceiling", it computes that in the browser and never sends it anywhere.
+**The ceiling never leaves the backend except to the user's own dashboard, through one endpoint.** It is accepted on `POST /jobs` (or the private runtime restoration route after restart) and returned only by `GET /jobs/{id}/ceiling`, so the user can see what they set. It is never in `JobView`, any event, the SSE stream, a log line, or an error message, and it is never sent to Fo, any dealer, or any LLM. The backend returns nothing derived from it (no "gap to budget", no "within budget" flag, no percentage of it); if the dashboard wants to show "best quote vs your ceiling", it computes that in the browser and never sends it anywhere.
 
 The target price (`target`) is not secret: the dashboard shows it, and it is the price Sealed openly asks dealers for.
 
@@ -21,7 +32,8 @@ Why the endpoint is separate: the event log stays ceiling-free, so `mock/check_m
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Service and integration status |
-| POST | `/dealers/discover` | Find dealers near a ZIP for the job's car (suggestions only; contacts no one) |
+| POST | `/dealers/discover` | Start public dealer research (`202`); does not start outreach |
+| GET | `/dealers/discover/{id}` | Read saved research progress and checked candidates |
 | POST | `/jobs` | Create a job |
 | GET | `/jobs/{id}` | Current job state (never includes the ceiling) |
 | GET | `/jobs/{id}/ceiling` | The ceiling the user set, for display on their dashboard only |
@@ -36,44 +48,34 @@ Why the endpoint is separate: the event log stays ceiling-free, so `mock/check_m
 ### GET /health
 ```json
 { "status": "ok", "version": "0.1.0", "mode": "sim",
-  "fo": "live" | "not_configured" | "down",
-  "gmail": "live" | "not_configured" | "down" }
+  "fo": "live" | "not_configured" | "not_checked" | "down",
+  "gmail": "live" | "not_configured" | "not_checked" | "down" }
 ```
 
-### POST /dealers/discover
-Finds dealers for the car within a radius of the ZIP. Claude (web search + web fetch, no other tools, never given the ceiling or target) proposes dealers; code then keeps only those whose contact details appear word for word on a fetched page and whose address ZIP is within the radius (offline ZIP-to-location distance check). **Nothing is contacted.** The user picks up to 5 results and sends them in `POST /jobs`.
+### POST /dealers/discover and GET /dealers/discover/{id}
+Fo-first discovery is asynchronous. POST accepts only public item/specification,
+US ZIP, `radius_miles: 20` and `allow_fo_research` (required true live). It returns
+`202` with a saved search ID, progress, status and cached flag. Poll GET until
+`complete`, `failed` or `needs_review`; neither endpoint waits for a long Fo turn.
+Completed results contain up to five checked candidates, nullable published
+contacts, official source URLs, approximate ZIP-centroid distances and unconfirmed
+inventory status. ZIP coordinates use the public Zippopotam.us service; there is
+no offline ZIP table. Simulation returns explicitly synthetic results without
+external calls. Research receives no target, ceiling or buyer identity.
 
-Request:
-```json
-{ "item": "2026 Honda Civic Sport", "spec": { "quantity": 1, "details": "2026 Honda Civic Sport sedan, Crystal Black Pearl, automatic" },
-  "zip": "19104", "radius_miles": 20 }
-```
-- `radius_miles`: optional, default `20`. **v1 accepts only `20`** (`422` otherwise). `10` and `50` are enabled later, once the core flow and dashboard are built (`docs/plan.md`).
-
-Response `200`:
-```json
-{
-  "zip": "19104", "radius_miles": 20, "mode": "live" | "sim",
-  "dealers": [
-    { "name": "Valley Honda", "email": "sales@valleyhonda.example" | null, "phone": "+1-215-555-0101" | null,
-      "website": "https://valleyhonda.example", "address": "3900 Chestnut St, Philadelphia, PA 19104",
-      "distance_miles": 4.2, "in_stock": true | false | null,
-      "source": { "kind": "discovery", "urls": ["https://valleyhonda.example/contact"] } }
-  ],
-  "dropped": 3
-}
-```
-- Every non-null `email`, `phone` and `address` appeared literally on one of `source.urls`. `in_stock: null` = not known.
-- `dropped`: how many Claude suggestions code removed (outside the radius, or details not found on a fetched page).
-- A dealer with neither email nor phone is never returned. A dealer with no email can only be reached by call.
-- Errors: `422` validation; `503` `{ "error": "discovery_unavailable" }` if the search fails (the user can still type dealers in by hand).
+Select candidates before creating a job. Copy each selected candidate's name,
+email, phone and `source` unchanged, including `discovery_id` and `candidate_id`.
+Job creation checks freshness (one hour), requirements and contact provenance.
+It does not start outreach. See [complete schemas, operation and provider
+limitations](dealer_discovery.md). Errors: invalid input `422`, unknown search
+`404`, missing live authorization `409 discovery_permission_required`.
 
 ### POST /jobs
 Request:
 ```json
 {
   "item": "Custom team hoodies",
-  "spec": { "quantity": 6, "details": "Navy, 2-colour front print, sizes S-XL" },
+  "spec": { "quantity": 1, "details": "Navy, 2-colour front print, sizes S-XL" },
   "deadline": "2026-10-30",
   "currency": "USD",
   "target": 330.0,
@@ -99,7 +101,7 @@ Response `200`: `JobView`
   "id": "job_7f3a",
   "run_id": "run_01",
   "item": "Custom team hoodies",
-  "spec": { "quantity": 6, "details": "Navy, 2-colour front print, sizes S-XL" },
+  "spec": { "quantity": 1, "details": "Navy, 2-colour front print, sizes S-XL" },
   "deadline": "2026-10-30",
   "currency": "USD",
   "target": 330.0,
@@ -155,9 +157,16 @@ Response `200`: `{ "job_id": "job_c41v", "ceiling": 32000.0, "currency": "USD" }
 - `404` if the job doesn't exist. Not logged (the request log records the path, never the body).
 
 ### POST /jobs/{id}/start
-Request: `{ "seed": 42 }` (optional; only used for sim sellers). Response `200`: `JobView`. `409` if already started.
+Request: `{ "seed": 42 }` is accepted for simulation compatibility; the current synthetic replies are deterministic. Live mode requires `{ "allow_model_requests": true, "allow_dispatch": true }`, plus `"allow_calls": true` for phone-only sellers. Response `200`: `JobView`; RFQs are queued for the worker. `409` if already started or permission/private state is missing.
 
 ### GET /jobs/{id}/events (SSE)
+
+Durable delivery adds `message.queued` (`message_id`, `kind`, `round`, `channel`) and
+`message.suppressed` (`message_id`, `reason_code`). Neither indicates a send. Only
+`message.sent` reports an actual transport outcome. Authenticated email events use
+the real `gmail:<id>` evidence reference and received subject. These components are
+implemented and wired to the API worker. See [reply delivery](reply_delivery.md), [coordinator](coordinator.md) and [dashboard operations](dashboard.md).
+
 - `Content-Type: text/event-stream`. Each message:
   ```
   id: 17
@@ -182,7 +191,7 @@ A sender-matched written update from the proposed dealer supersedes its old term
 `{ "proposal_id": "p_01", "reason": "optional free text" }` → `200` `JobView`. `409` if stale.
 
 ### POST /jobs/{id}/cancel
-`{ "reason": "optional" }` → `200` `JobView` (state `CANCELLED`). Contacted sellers get a short, polite "no longer needed" note (live mode only after the UI confirms).
+`{ "reason": "optional" }` → `200` `JobView` (state `CANCELLED`). Stops queued outreach. The current implementation does not send cancellation notes or recall an in-flight send. Free-text reasons are not copied into events or outreach.
 
 ### GET /jobs/{id}/receipt
 `200` once `COMPLETED`, `409` before.
@@ -203,7 +212,7 @@ Sim mode only (`404` in live mode).
 ```json
 { "job_id": "job_7f3a", "steps": 1 }
 ```
-`steps`: number of pending simulated seller actions to release (default 1; `-1` = run to completion). Response: `{ "released": 1, "pending": 3 }`.
+`steps`: coordinator cycles to release (default 1), advancing the virtual clock to due timers as needed. `-1` runs to the next approval/review gate or completion; it never approves automatically. Response includes `released` (cycles), `pending` (0 or 1 for remaining progression) and `state`.
 
 ---
 
@@ -231,9 +240,9 @@ Sim mode only (`404` in live mode).
 | `job.created` | null | `item`, `spec`, `zip` (v0.3, optional), `deadline`, `currency`, `target`, `max_rounds`, `vendors: [{id, name, email, phone, mode}]` (`phone` v0.3, optional). Never the ceiling. |
 | `job.started` | null | `seed` (sim only, else null), `round: 1` |
 | `vendor.contacted` | set | `message_id`, `round` (vendor state becomes `CONTACTED`) |
-| `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Rules: `secret_checker` (yes/no only, never the value; scans the full outgoing payload), `limit_language` (no "budget"/"max price"-style wording), `leverage_grounded`, `commitment_words`, `safety_line`, `payload_integrity` (headers and instruction wrapper match our payload; no header or marker injection); at the `fo_preview` stage also `preview_matches_ours` (exact payload, allowing only known confirmation wrappers). No budget values ever. Optional `stage: "pre_send" | "fo_preview"` (a message can be checked twice: our text, then Fo's confirmation preview). |
-| `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body` (the exact email body we asked Fo to send), `offer` (number or null), `cited_quote_id` (price_match only). Optional `channel: "email" | "call"` (default email); for a call, `body` is the sealed call brief (goal, allowed facts, hard limits) and `subject` is null. Optional `numbers`: every number in `body` and where it came from (see below). |
-| `audit.checked` | set | `message_id`, `cc_copy_found: bool`, `matched: bool` (Fo's sent copy equals our body), `diff` (null or short text), `guard_passed: bool` (guard re-run on the actual sent copy) |
+| `guard.checked` | set | `message_id`, `kind`, `round`, `passed: bool`, `rules: [{rule, passed, detail?}]`. Common rules: `secret_checker`, `limit_language`, `leverage_grounded`, `commitment_words`, `safety_line`, `payload_integrity`. For Fo-composed email, preview rules also include `draft_routing`, `brief_numbers`, `price_roles`, `facts_grounded`, `action_scope`, `brief_intent`; unsupported envelopes have `draft_format: false`. These are conservative checks, not proof of arbitrary prose. Legacy exact-email/call previews retain `preview_matches_ours`. No private values or rejected draft excerpts. Optional `stage: "pre_send" | "fo_preview"`. |
+| `message.sent` | set | `message_id`, `kind`, `round`, `to`, `subject`, `body`, `offer` (number or null), `cited_quote_id` (price_match only). New brief-mode email includes `brief` and `content_source: "fo_preview" | "pending_gmail"`: `body` is the reviewed Fo draft, or empty when unknown, never the brief. A preview is not delivered-copy evidence. Legacy exact email keeps its original body semantics. Optional `channel: "email" | "call"` (default email); for a call, `body` is the call brief and `subject` is null. Optional `numbers` describes the displayed body only. |
+| `audit.checked` | set | `message_id`, `cc_copy_found: bool`, `matched: bool`, `diff` (null or short safe text), `guard_passed: bool`. Optional `basis: "brief_constraints" | "exact_payload"`; brief mode checks authorized content and allows compliant wording/signatures. Legacy exact mode checks normalized body equality. Full Gmail auditing adds `rules`, `reason_code`, and `evidence: {kind: "gmail_message", ref}` or null. Pending observations are stored locally without emitting a final check. Reports/failed events never include unsafe body excerpts. A reviewed preview alone is not an audit. |
 | `reply.received` | set | `reply_id`, `in_reply_to` (message_id), `source: vendor_email | fo_relay | call` (`call` = Fo's summary of a phone call), `from`, `subject`, `text` (seller's own words, quotes/signature stripped), `evidence: {kind, ref}` |
 | `quote.parsed` | set | `reply_id`, `quote_id`, `price_total` (null if none), `price_unit`, `derived_total: bool` (total computed by code from unit x qty), `currency`, `firm: bool`, `hedge_words: []`, `delivery_date`, `meets_deadline: bool`, `meets_spec: bool`, `declined: bool`, `suspicious_instructions: bool`, `numbers_grounded: bool`. Optional `source: "email" | "call"`; a price heard on a call always has `firm: false` and is never cited to other sellers. Optional `breakdown` (itemised parts as the dealer wrote them) and `breakdown_flags: [breakdown_mismatch | breakdown_ungrounded]`. |
 | `quote.verified` | set | `subject_id` (quote_id or message_id for a booking), `status: VERIFIED | UNVERIFIED`, `reason`, `evidence: {kind, ref}`. VERIFIED only when the seller's own email is in the user's inbox; a Fo relay alone is UNVERIFIED. |

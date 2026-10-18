@@ -194,9 +194,9 @@ class FakeIMAP:
         if "RFC822.SIZE" in args[1]:
             return "OK", [f'1 (UID 42 X-GM-MSGID 123456 X-GM-THRID 555 RFC822.SIZE {self.size} '
                           'INTERNALDATE "18-Oct-2026 13:09:46 +0000")'.encode()]
-        assert args[1] == "(UID BODY.PEEK[])"
+        assert args[1] == "(UID X-GM-MSGID BODY.PEEK[])"
         # Untagged FLAGS can be interleaved without breaking literal extraction.
-        return "OK", [b"1 (FLAGS ())", (b"1 (UID " + self.returned_uid + b" BODY[] {100}", self.raw), b")"]
+        return "OK", [b"1 (FLAGS ())", (b"1 (UID " + self.returned_uid + b" X-GM-MSGID 123456 BODY[] {100}", self.raw), b")"]
 
     def logout(self):
         self.closed = True
@@ -303,3 +303,29 @@ def test_cli_uses_private_bindings_and_prints_counts_only(tmp_path, monkeypatch,
     output = capsys.readouterr().out
     assert json.loads(output)["pending"] == 1
     assert "$100" not in output and SELLER not in output and OWNER not in output
+
+
+def test_server_sent_label_is_retained_and_body_identity_must_match_metadata():
+    fake = FakeIMAP()
+    original = fake.uid
+    def with_label(command, *args):
+        status, data = original(command, *args)
+        if command == "FETCH" and "RFC822.SIZE" in args[1]:
+            data = [data[0].replace(b"RFC822.SIZE", b"X-GM-LABELS (\\Sent) RFC822.SIZE")]
+        return status, data
+    fake.uid = with_label
+    with reader(fake) as client:
+        assert client.fetch("42").gmail_labels == ("\\Sent",)
+    def wrong_id(command, *args):
+        status, data = original(command, *args)
+        if command == "FETCH" and "BODY.PEEK" in args[1]:
+            data[1] = (data[1][0].replace(b"X-GM-MSGID 123456", b"X-GM-MSGID 654321"), data[1][1])
+        return status, data
+    fake.uid = wrong_id
+    with reader(fake) as client, pytest.raises(GmailError, match="inconsistent message identity"):
+        client.fetch("42")
+
+
+def test_an_email_header_cannot_spoof_gmail_sent_metadata():
+    raw = wire(auth=None).replace(b"From:", b"X-GM-LABELS: \\Sent\nFrom:", 1)
+    assert decoded(raw).gmail_labels == ()

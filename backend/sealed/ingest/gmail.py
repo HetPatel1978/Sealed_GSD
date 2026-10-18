@@ -70,7 +70,7 @@ class GmailReader:
         if not uid.isdigit():
             raise ValueError("Invalid Gmail UID.")
         try:
-            meta = self._ok(self.connection.uid("FETCH", uid, "(UID X-GM-MSGID X-GM-THRID RFC822.SIZE INTERNALDATE)"))
+            meta = self._ok(self.connection.uid("FETCH", uid, "(UID X-GM-MSGID X-GM-THRID X-GM-LABELS RFC822.SIZE INTERNALDATE)"))
             metadata = b" ".join(part for part in meta if isinstance(part, bytes))
             size = re.search(rb"RFC822.SIZE (\d+)", metadata)
             gm_id = re.search(rb"X-GM-MSGID (\d+)", metadata)
@@ -83,7 +83,7 @@ class GmailReader:
                 raise GmailError("Gmail returned a different message; retry the poll.")
             if int(size.group(1)) > MAX_MESSAGE_BYTES:
                 raise GmailError("Matching email exceeds the ingestion size limit; review it manually.")
-            parts = self._ok(self.connection.uid("FETCH", uid, "(UID BODY.PEEK[])"))
+            parts = self._ok(self.connection.uid("FETCH", uid, "(UID X-GM-MSGID BODY.PEEK[])"))
             literals = [part for part in parts if isinstance(part, tuple) and len(part) == 2 and isinstance(part[1], bytes)]
             if len(literals) != 1 or not literals[0][1] or len(literals[0][1]) > MAX_MESSAGE_BYTES:
                 raise GmailError("Gmail returned an invalid or oversized message body.")
@@ -93,9 +93,17 @@ class GmailReader:
             returned_uid = re.search(rb"\bUID (\d+)\b", literals[0][0])
             if not returned_uid or returned_uid.group(1).decode() != uid:
                 raise GmailError("Gmail returned a different message; retry the poll.")
+            returned_id = re.search(rb"\bX-GM-MSGID (\d+)\b", literals[0][0])
+            if not returned_id or returned_id.group(1) != gm_id.group(1):
+                raise GmailError("Gmail returned inconsistent message identity; retry the poll.")
+            labels = re.search(rb"X-GM-LABELS \(([^)]*)\)", metadata)
+            # Only the server's system Sent label matters for own-account mail
+            # which may not have an inbound Authentication-Results header.
+            sent = bool(labels and re.search(rb'(?:^|[\s"])\\Sent(?:$|[\s"])', labels.group(1)))
             received_at = parsedate_to_datetime(received.group(1).decode()).astimezone(timezone.utc).isoformat()
             return decode_message(literals[0][1], gmail_id=gm_id.group(1).decode(), uid=uid,
-                                  thread_id=thread.group(1).decode(), received_at=received_at)
+                                  thread_id=thread.group(1).decode(), received_at=received_at,
+                                  gmail_labels=("\\Sent",) if sent else ())
         except (imaplib.IMAP4.error, OSError, ValueError, TypeError, UnicodeError, RecursionError):
             raise GmailError("Gmail message could not be decoded; no reply was consumed.") from None
 

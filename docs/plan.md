@@ -1,120 +1,260 @@
-# Sealed — build plan (delta vs repo)
+# Sealed — architecture ("sealed envelope")
 
-Status: 2026-10-17 (Saturday). Design: `docs/architecture.md` (decided). Code freeze: **Sunday evening**. Post on X by **Mon Oct 19, 10:15am ET**. Backend and dashboard are built together by the team. v0.3 additions: ceiling + target shown on the dashboard (decision 13), dealer discovery with a 20-mile radius (decision 14).
+Status: updated 2026-10-18 for Fo email briefs and Fo-first dealer discovery (decision 14 revised). Supersedes `docs/sealed_module_io_flow.png`. API and event contract: `docs/api.md`; email contract: `docs/fo_briefs.md`; discovery operation: `docs/dealer_discovery.md`.
 
-## 1. Keep / change / delete, file by file
+Launch scenario: buying one specific car from several dealers (see `docs/research/problem.md`).
 
-| File | Action | Notes |
-|---|---|---|
-| `backend/app/main.py` | **Change** | Add the routes from `docs/api.md` + SSE, including `GET /jobs/{id}/ceiling` (`no-store`, not logged) and `POST /dealers/discover`. `/health` stays. |
-| `backend/sealed/env.py` | Keep | |
-| `backend/sealed/fo/auth.py` | Keep | Token storage with absolute expiry, refresh before connect (VERIFIED). One adapter process only (refresh tokens rotate). |
-| `backend/sealed/fo/messages.py` | **Done (step 1)** | Fo's voice ("I'm Fo, an AI assistant writing on behalf of …"); kinds `rfq`, `firm_up`, `price_match`, `counter` (target only), `booking`, `cancel`; **add call scripts** (`rfq` nudge, round-2 `price_match`). Keep `wrap_for_fo` + tag. Inputs: job spec, target, ledger facts. No ceiling parameter anywhere. |
-| `backend/sealed/fo/adapter.py` | **New** | Serial queue; one Fo conversation per dealer; dedupe key (dealer, round, kind, channel); preview check before "yes"; poll `get_fo_reply`, never resend. Live + sim implementations. |
-| `backend/sealed/core/ledger.py` | **Done (step 1)** | Quotes as records; firm = written out-the-door total for the exact spec; spoken prices stored `firm: false, source: call`. |
-| `backend/sealed/core/strategy.py` + `engine.py` | **Done (step 1)** | Fixed round plan. **No ceiling input** (signature enforces it). Offers only target or ledger values. |
-| `backend/sealed/private/qualifier.py` (+ `vault.py`) | **Done (step 1)** | Only module that reads the ceiling (plus the checker). Runs once after the fixed rounds → `propose` / `needs_human`. |
-| `backend/sealed/core/guard.py` + `private/secret_checker.py` | **Done (step 1)** | Rules: secret checker (number, words, ±2%), budget vocabulary, grounded leverage, commitment words, safety line. Stages `pre_send` and `fo_preview`. |
-| `backend/sealed/ingest/gmail.py` | **Reply staging done; audit next** | Read-only UID IMAP; authenticated sender + tag/thread matching; ambiguous matches quarantined; durable Gmail-ID dedupe and pending replies. See `docs/gmail_ingestion.md`. Actual sent-copy auditing remains separate work. |
-| `backend/sealed/parser/quote.py` | **New** | Quarantined LLM → fixed record; code validates spec match, out-the-door total, grounding. |
-| `backend/sealed/discovery/dealers.py` | **New** | Claude (`web_search` + `web_fetch`, structured output; no ceiling, no target) → dealer records; code keeps details found literally on fetched pages, distance check with `pgeocode` (offline ZIP table), radius 20 only in v1. Add `anthropic` and `pgeocode` to `backend/requirements.txt` when built. |
-| `backend/sealed/core/events.py`, `store.py` | **New** | Append-only event log (SQLite), SSE replay by `Last-Event-ID`. |
-| `backend/tests/` | **Extend** | Unit tests per module + a full sim run test that greps every outgoing string and event for the ceiling; import test: only `qualifier`/`secret_checker` and the `GET /jobs/{id}/ceiling` route read the ceiling store; `JobView` never contains it; discovery prompt never contains ceiling or target; discovery drops details not found on a fetched page and dealers outside 20 miles. |
-| `docs/api.md` | **Change** | v0.2 optional fields + v0.3 ceiling endpoint and discovery (section 2). Done. |
-| `mock/build_mock.py`, `mock/events.json` | **Rewrite** | Car scenario; offers only target or null; includes a call nudge, a spoken price (`firm: false`), a `fo_preview` guard check. |
-| `mock/check_mock.py` | **Change** | Also assert `strategy.decided.offer ∈ {target, null}`; allow the new optional fields. |
-| `mock/ceiling.json`, `mock/discovery.json` | **New (done)** | Sample responses for `GET /jobs/{id}/ceiling` and `POST /dealers/discover`. `check_mock.py --secret 32000` confirms no event contains the mock ceiling (same value as the sim run). |
-| `docs/sealed_module_io_flow.png` | Keep, marked superseded | README points to `architecture.md`. |
-| `docs/fo_tools.md` | Keep, stale | Superseded by `docs/research/fo_mcp.md` (5 tools, output schemas). |
-| `spikes/*` | Keep | Throwaway; nothing imports them. |
-| `frontend/` | **New** | Dashboard: intake (car, ZIP, target, ceiling), dealer picker (discovered or typed), target + ceiling display, live dealer view, approval gate, receipt. |
+## 1. The idea
 
-## 2. API / event changes for the dashboard (nothing removed or renamed)
+Fo does the outreach on its own channels: **email and phone calls**. Sealed authorizes each action and supplies a brief with permitted public facts and price roles; Fo chooses natural wording. For email, code checks the full generated draft before confirming it. **No outgoing brief, offer or strategy decision is computed from the ceiling.** Outgoing prices are only:
 
-| Event / field | Change |
-|---|---|
-| `strategy.decided.offer` | Always equals the job's `target`, or `null`. |
-| `guard.checked.stage` | New optional: `"pre_send"` \| `"fo_preview"`. A message can have two guard checks. |
-| `message.sent.channel` | New optional: `"email"` \| `"call"`. `kind` unchanged. For calls, `body` holds the sealed brief and `subject` is null. |
-| `quote.parsed.source` | New optional: `"email"` \| `"call"`. A spoken price arrives with `firm: false`, `source: "call"`. |
-| `reply.received.source` | Adds `"call"` (Fo's call summary) next to `vendor_email` / `fo_relay`. |
-| Mock scenario | One car: `spec.quantity: 1`, `spec.details` = model/trim/color; all prices are out-the-door totals. |
-| `GET /jobs/{id}/ceiling` (v0.3) | New. The only place the ceiling is returned; the dashboard shows it next to the target, keeps it in memory only. Never in `JobView` or events. |
-| `POST /dealers/discover` (v0.3) | New. Car + ZIP + `radius_miles` (20 only in v1) → suggested dealers with distance and source links. Contacts no one. |
-| `POST /jobs` (v0.3) | Optional `zip`; per vendor optional `phone` and `source`. Each vendor needs an email or a phone. |
+- a dealer's own quote,
+- the lowest written competing quote (true, from the ledger), or
+- the user's **target**, which is public, fixed when the job is created, and never moves.
 
-**Compatibility check (done):** the envelope and every existing field are unchanged, so a dashboard built on the current `docs/api.md` and `mock/events.json` keeps working. One semantic difference: the current mock's round-2 counter has `offer: 357`, which the new rule forbids (`offer` must be the target, 330, or null). The dashboard should not assume a counter offer differs from the target. The regenerated car mock fixes this.
+So the ceiling cannot leak through what we send or say, even indirectly ("offer drift"). Inside the backend it is used in exactly one place: after a fixed number of rounds, a small qualifier decides whether the best firm quote is good enough to *propose to the user*, or whether to raise `job.needs_human`. That decision is output only as "proposal" or "needs human", never as a number or a gap.
 
-## 3. Build order (estimates; Saturday ~14:00 ET → Sunday ~19:00 ET freeze)
+The user can **see their own ceiling and target on the dashboard**. The ceiling reaches the dashboard through one private endpoint (`GET /jobs/{id}/ceiling`), never through events, so the event log and everything sent to Fo stay ceiling-free. Fo, dealers and every LLM never see it.
 
-| # | Step | Estimate | Target window | Done when |
+Dealers can be **typed in by the user or discovered**: Fo researches public websites and suggests dealers for the car near the user's ZIP, code keeps only those within the radius (20 miles in v1) whose contact details appear word for word on a fetched page, and the user picks up to 5. Discovery contacts no one.
+
+Calls are a core channel with two jobs: nudge silent dealers to send a written quote, and carry the true lowest written total to a dealer in round 2. **A spoken price is never a firm quote**; only written replies enter the ledger as firm.
+
+The secret checker and pre-/post-send checks stay as defence in depth.
+
+Step 1 validation rules: a firm quote needs a matching configured dealer sender, a finite positive total present in the dealer's text, the job's currency and specification, and no hedge or decline. Strategy and qualification use only the latest sender-matched written reply per dealer, so a withdrawal or non-firm revision retires an older offer. Historical quotes remain available for evidence and the first-quote savings baseline. A dealer update invalidates its pending proposal; booking completion requires a confirmation linked to the sent booking with the exact approved terms. The guard scans outgoing briefs and generated drafts, requires exact routing, and checks disclosure, specification, permitted numbers/price roles, commitments and known unsupported claims/actions. Compliant rewording and ordinary signatures are allowed. These are conservative rules, not semantic proof of arbitrary prose; ambiguous or unsupported formats require review. Legacy exact-email and call preview checks remain strict.
+
+## 2. System diagram
+
+```mermaid
+flowchart TB
+    subgraph UI["Dashboard — the user's own screen"]
+        INTAKE["Job intake<br/>car spec, ZIP, target, ceiling, dealers"]
+        PICK["Dealer picker<br/>discovered suggestions or typed in"]
+        SHOW["Target + ceiling display<br/>ceiling via private endpoint only"]
+        APPROVE["Approval gate<br/>user taps exact terms"]
+    end
+
+    subgraph DISC["Dealer discovery — never sees ceiling or target"]
+        FIND["Fo: public website research<br/>research-only instructions"]
+        DCHECK["Code checks<br/>details on fetched page; ZIP distance ≤ radius (20 mi)"]
+    end
+
+    subgraph PRIVATE["Private zone (backend only)"]
+        VAULT[("Ceiling<br/>shown only on the user's dashboard")]
+        QUAL["Qualifier<br/>propose or needs_human"]
+        SECRET["Secret checker<br/>text in, yes/no out"]
+    end
+
+    subgraph CORE["Sealed core — never sees the ceiling"]
+        STRAT["Strategy engine<br/>fixed rounds; target + ledger only"]
+        BUILD["Brief builder<br/>email + call goals, public facts<br/>permitted prices and action limits"]
+        GUARD["Pre-send guard<br/>rules incl. secret checker"]
+        FOAD["Fo adapter<br/>one conversation per dealer, serial queue"]
+        INGEST["Reply ingestion<br/>Gmail IMAP (dealer's own email)<br/>+ Fo call summaries"]
+        PARSE["Quote parser<br/>LLM → fixed record, code validates"]
+        LEDGER[("Quote ledger<br/>firm = written only")]
+        AUDIT["Post-send audit<br/>actual routing + brief constraints"]
+    end
+
+    subgraph EXT["Outside"]
+        FO["Fo (Wajo MCP)"]
+        DEALERS["Dealers"]
+    end
+
+    INTAKE -->|"car, ZIP, radius"| FIND
+    FIND -->|"suggested dealers + source pages"| DCHECK
+    DCHECK -->|"verified suggestions"| PICK
+    PICK -->|"chosen dealers (max 5)"| STRAT
+    INTAKE -->|ceiling| VAULT
+    VAULT -.->|"GET /jobs/{id}/ceiling (display only)"| SHOW
+    INTAKE -->|"car spec, target"| STRAT
+    STRAT -->|"decision: rfq / firm_up / price_match / counter@target / booking, channel email or call"| BUILD
+    BUILD --> GUARD
+    GUARD <-->|"yes/no"| SECRET
+    VAULT -.-> SECRET
+    GUARD -->|passed text only| FOAD
+    FOAD <-->|"ask_fo, Fo's confirmation preview, get_fo_reply"| FO
+    FOAD -->|"preview text"| GUARD
+    FO -->|"email from Fo's address, CC user"| DEALERS
+    FO -->|"phone call, Fo's own words within a sealed brief"| DEALERS
+    DEALERS -->|"written reply (reply-all)"| INGEST
+    FO -->|"voice transcript, post-call review (spoken price = not firm)"| INGEST
+    INGEST --> AUDIT
+    AUDIT <-->|"yes/no"| SECRET
+    INGEST -->|"dealer's own words"| PARSE
+    PARSE --> LEDGER
+    LEDGER --> STRAT
+    STRAT -->|"after fixed rounds: best firm quote"| QUAL
+    VAULT -.-> QUAL
+    QUAL -->|"proposal or needs_human"| APPROVE
+    APPROVE -->|"approved terms"| STRAT
+```
+
+## 3. Who knows what
+
+| Component | Ceiling | Target | Dealer quotes | Notes |
 |---|---|---|---|---|
-| 0 ✅ | Car mock + `check_mock.py` rule update (unblocks the dashboard) | 1 h | Sat 14:00–15:00 | `check_mock.py` green on the car run |
-| 1 ✅ | Ledger + strategy (fixed rounds) + qualifier + templates + call scripts + guard, with unit tests, runnable end-to-end in **sim mode** | 5 h | Sat 15:00–20:00 | A sim job produces the full event stream; ceiling-grep test green |
-| 2 | Fo adapter: serial queue, one conversation per dealer, preview check, `get_fo_reply` polling, dedupe | 3 h | Sat 20:00–23:00 | One live email to rfb5381@psu.edu through the adapter (after a team member approves) |
-| 3 | Reply ingestion (Gmail IMAP) + quote parser + validation + post-send audit | 4 h | Sun 08:00–12:00 | A test reply-all from rfb5381@psu.edu becomes a ledger quote; audit diff recorded |
-| — | **Decision: real dealers vs stand-ins** | — | **Sun 12:00** | |
-| 4 | Calls: round-1 nudge to non-responders, round-2 call, through the same adapter and queue; call summary → `reply.received` (source `call`) | 2 h | Sun 12:00–14:00 | One call to a team member's own phone through the adapter |
-| 5 | SSE + routes matching `docs/api.md` (incl. `GET /jobs/{id}/ceiling`); dashboard switches from mock to live | 3 h | Sun 14:00–17:00 | Dashboard shows a live sim run with target + ceiling displayed |
-| 6 | Dealer discovery: `POST /dealers/discover` (option A Claude or option B Fo, see below; code check + distance check, 20 mi) + dealer picker in the dashboard | 2 h | Sun 17:00–18:00 | Search for the demo car near the demo ZIP returns verified dealers within 20 miles |
-| — | End-to-end run, README, tests green, freeze | 1 h | Sun 18:00–19:00 | Freeze |
-| later | Radius options 10 / 50 miles (API + dashboard selector), only after the core flow and dashboard are built | 0.5 h | after freeze | `radius_miles` accepts 10, 20, 50 |
-| — | Demo video + X post draft | — | Sun night | Posted by Mon 10:15 ET |
+| Dashboard (the user's own screen) | **Yes, display only** (`GET /jobs/{id}/ceiling`) | Yes | Yes | Never in events/SSE; never stored in `localStorage` or URLs; never sent on in any request. |
+| Dealer discovery (Fo) | **No** | **No** | No | Gets only car, ZIP, radius. Research-only instructions; Fo tools are not mechanically restricted. Code checks public sources and contacts. |
+| Ceiling vault | **Yes** | — | — | Backend memory/env only. Not logged. |
+| Secret checker | **Yes** | — | — | Text in, yes/no out. Defence in depth. |
+| Qualifier | **Yes** | Yes | Best firm quote only | Outputs `propose` or `needs_human`. Runs once, after the fixed rounds. |
+| Strategy engine | **No** | Yes | Yes | Fixed round plan; offers are only target or a real ledger quote. |
+| Brief builder | No | Only if offered | Ledger values | No LLM. Fo composes from the public brief. |
+| Call brief | **No** | No | Only the lowest written total (round 2) | Goal + allowed facts + fixed hard limits; Fo talks in its own words inside it. Guarded before the call; transcript reviewed after. |
+| Pre-send guard | No (asks checker) | If offered | Allowed values | Checks the brief and Fo's generated draft against routing, price roles and constraints. |
+| Fo adapter / Fo | No | Only if a counter is sent | Only what a message or brief states | One Fo conversation per dealer. Fo has durable memory (CLAIMED), so nothing secret is ever given to it. |
+| Quote parser | No | No | Yes | Untrusted input → strict record with evidence; code validates. Implemented in `sealed/parser/quote.py`; [read-only preview and limits](quote_parser.md). Engine delivery remains separate. |
+| Each dealer | No | Only if countered | Its own + best competing total (no dealer name) | All true. |
 
-The dashboard can be built against the mock (`events.json`, `ceiling.json`, `discovery.json`) from step 0 onward; SSE wiring lands in step 5.
+## 4. Round plan (fixed, never depends on the ceiling)
 
-### Step 6 options: who finds the dealers (not built yet; choose before step 6)
+| Round | Who | Channel | Message kind | Content |
+|---|---|---|---|---|
+| 1 | every dealer with an email | email | `rfq` | Exact car (model, trim, color), zip, timeline, ask for a written **out-the-door** total. |
+| 1 | phone-only dealers (no email on file) | **call** | `rfq` | "I'm Fo, calling for a buyer about [exact car]. Could you email the out-the-door total to [buyer's address]?" Counts as their call nudge. Later emails go to the first sender that trusted ingestion attributes to this dealer's call. An unknown sender alone never establishes identity. |
+| 1 | dealers with no email reply after a fixed wait (e.g. 3 h, set at job creation) | **call** | `rfq` (call nudge) | Sealed brief. Goal: get a written out-the-door total emailed. Facts: car, ZIP, timeline, buyer's first name, "we emailed and have no reply yet". Once per dealer. |
+| 1b | dealers whose written reply is not firm | email | `firm_up` | "Please send the out-the-door total including all fees and taxes." Once. |
+| 2 | every dealer with a firm quote that is not the lowest | email | `price_match` | "Your total is $X. The lowest written out-the-door total so far is $Y. Would you like to revise?" |
+| 2 | same dealers (optional, fixed rule: dealers that didn't answer the round-2 email after the wait) | **call** | `price_match` (call) | Sealed brief. Goal: tell them the lowest written total ($Y) and ask for a revised written total by email. No new numbers, no agreement. |
+| 2 | the dealer holding the lowest quote | email | `counter` (optional) | "Could you do $target out-the-door?" Target is fixed; sent only if target < lowest quote. |
+| end | — | — | qualifier | Best firm quote → `propose` or `needs_human`. |
+| after approval | winner | email | `booking` | "The buyer would like to proceed at $Z. Please send the purchase paperwork." No payment through Fo. |
+| after approval | others | email | `cancel` | Polite decline. |
 
-Both options end in the same code checks, and neither ever gets the ceiling or the target.
+Whether a call or round 2 happens never depends on the ceiling, so the timing of messages and calls reveals nothing. A price heard on a call is logged (`quote.parsed`, `firm: false`, source `call`) and triggers nothing until the dealer puts it in writing.
 
-| | Option A: Claude (decision 14) | Option B: Fo |
-|---|---|---|
-| How | Claude Messages API with `web_search` + `web_fetch` server tools, structured output: dealers of the exact car near the ZIP, with name, website, sales email, phone, address and the pages each came from. | One `ask_fo` turn in a **new** conversation: "Find franchise dealers for [exact car] within 20 miles of ZIP [zip]. For each, give the name, website URL, sales email and phone. Don't contact anyone." Fo returns free text; code extracts the fields. |
-| Code check | Each email / phone / address must appear word for word in the page text from Claude's own `web_fetch` results; distance from the address ZIP with an offline ZIP table (`pgeocode`); drop outside 20 mi. | **Code fetches each URL itself** (plain HTTP GET, read-only) and keeps an email / phone / address only if it appears word for word on that page; same distance check; drop outside 20 mi. |
-| Pros | Structured output; the page text comes back in the same response; one API key we already plan for the parser. | Uses Fo (the hackathon's tool); no extra prompt engineering for tools; Fo may know local dealers well. |
-| Cons / risks | Web search has no real radius (the distance check fixes that). | Free text (needs parsing); slower (~20–50 s per turn, serial queue shared with sends); Fo might act beyond "find" (the prompt says contact no one, and the turn is checked like any other: a reply that suggests it contacted someone raises `needs_human`); Fo remembers across conversations, so the request must contain only the car and ZIP. Our own fetcher must handle robots/blocked pages and never submit forms. |
-| Status | Planned (decision 14). | Option, not built. |
+## 5. One send, step by step
 
-## 4. Cut list (in cut order)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as Strategy engine
+    participant B as Message builder
+    participant G as Pre-send guard
+    participant C as Secret checker
+    participant A as Fo adapter
+    participant F as Fo
+    participant D as Dealer
+    participant I as Reply ingestion
+    participant P as Quote parser
 
-1. **Dealer discovery** → the user types dealers in by hand (the existing `POST /jobs` path).
-2. **Live dealer round** → fall back to stand-in dealers (labelled on screen).
-3. **Round-2 calls** → keep the round-1 call nudge.
+    S->>B: decision (e.g. price_match, cite q_04, channel email or call)
+    B->>G: email or call brief: objective, facts, prices, limits
+    G->>C: text
+    C-->>G: yes/no
+    G->>A: passed text only
+    A->>F: draft one email from brief, or call D within brief
+    alt email draft or call confirmation
+        F-->>A: full generated email draft or call brief preview
+        A->>G: check routing, facts, prices, commitments and scope
+        A->>A: persist reviewed email draft before confirmation
+        G-->>A: pass, answer "yes" / fail, stop and flag
+    end
+    Note over A,F: status "working" means poll get_fo_reply, never resend ask_fo
+    alt email
+        F->>D: email from Fo's address, user CC'd
+        I->>I: CC copy found, audit actual routing and brief constraints
+        D-->>I: written reply-all
+    else call
+        F->>D: phone call in Fo's own words, inside the brief
+        F-->>I: voice transcript via get_fo_conversation
+        I->>I: post-call review, numbers outside brief, commitments, money topics
+    end
+    I->>P: dealer's own words only
+    P->>P: fixed record, code checks sender, trim, out-the-door total
+    P-->>S: written quote (firm or not) to ledger, spoken price logged as not firm
+```
 
-The **Gmail post-send audit is not on the cut list**: spike 1c showed Fo sends without a preview and its conversation doesn't contain the sent email, so the CC copy in Gmail is the only check of what Fo actually sent.
+## 6. Trust boundaries
 
-Never cut: ceiling isolation (qualifier only inside the backend; never in events, Fo or LLMs), local-only API (loopback bind, one localhost CORS origin), Gmail post-send audit, pre-send guard, written-quotes-only rule, approval gate, live/sim labels.
+1. **Ceiling → anything outgoing.** No outgoing number is computed from it (by construction). The secret checker is a second line, before and after sending.
+2. **Sealed → Fo.** Public briefs cross; raw seller instructions and the private ceiling do not. Fo composes one email and returns an explicit draft envelope. Code checks it and saves it before confirming. Reported sending without a reviewed draft pauses the account without resending. Compliant wording and ordinary signatures are allowed. The Gmail sent-copy auditor now validates actual routing, sender authentication and full inline text alternatives; its callback keeps a durable sent reservation active until verification. The controlled brief command wires this path, and the background coordinator connects dispatch with polling and durable timers; the local API and dashboard now connect to this worker. No claim is made that the rule checker proves every natural-language fact. Fo claims durable memory across conversations, so the rule "never mention a budget to Fo, in any form" covers every chat, test and manual use of the account.
+3. **Dealers → Sealed.** Written replies and call summaries are untrusted. They become a fixed record validated by code and never reach Fo or any prompt that can act. `suspicious_instructions` raises a flag.
+4. **Dashboard.** The ceiling crosses to the browser only on `GET /jobs/{id}/ceiling` (`no-store`). The dashboard never talks to Fo, so showing the ceiling there gives Fo no path to it. Shown on screen means visible to anyone looking at it (e.g. a recorded demo); that is the user's choice.
+5. **Dealer websites → discovery.** Web pages are untrusted (could contain instructions or wrong details). Discovery receives no ceiling or target and is instructed to perform public research only; Fo tool isolation is not mechanically enforced; code keeps an email/phone/address only if it appears literally on a fetched page, recomputes the distance from the address ZIP, and the user picks who is contacted.
+6. **Calls.** A call **cannot leak the ceiling**: Fo never has it, and the brief contains only ledger facts. Fo runs the conversation in its own words inside a **sealed brief**: a goal (get a written total emailed), the only facts it may use, and fixed hard limits (say it's an AI assistant; no agreeing, reserving, ordering or paying; no payment details; no numbers outside the brief; no follow-ups; questions about spending or deposits get one fixed answer). The guard checks the brief before the call. After the call, the **post-call review** reads the voice transcript and flags any number Fo said that isn't in the brief, any commitment wording from Fo, and any mention of budget, deposit or payment by either side; flags raise `job.needs_human` (`call_review`). Only written quotes count; spoken prices stay `firm: false`. Call recording/consent is the user's responsibility under Wajo's terms; see `docs/threat_model.md`.
 
-## 5. Demo checklist
+## 7. Fo-specific decisions (from spikes and the official spec)
 
-- [ ] **Sunday noon:** decide real dealers (only with real purchase intent for that exact car) vs stand-in dealers.
-- [ ] If stand-ins: 3 consenting people with real inboxes (one is rfb5381@psu.edu), scripted replies (clean total; MSRP + "fees extra"; late reply that revises down). **At least one stand-in reachable by phone** so the demo shows a call.
-- [ ] Demo Wajo account: no payment card connected; no budget ever mentioned to Fo in any chat.
-- [ ] Every send and call approved by the user or a team member; test calls only to a team member's own phone.
-- [ ] Polite decline sent to every non-winner.
-- [ ] If discovery is shown with stand-in dealers: run the search live, then label clearly that the run uses stand-ins.
-- [ ] The ceiling is visible on screen in the video (the user's own view); confirm 0 ceiling mentions in every message and event.
-- [ ] Trust counter on screen: messages checked before/after, 0 ceiling mentions, 0 commitments without approval.
-- [ ] **Record the demo video Sunday night**; post on X by Mon 10:15 ET.
+- **Fo's voice.** Fo refuses to send text written as the user (spike 1b, VERIFIED). Briefs require Fo to identify itself as an AI assistant acting for the buyer; generated wording may vary.
+- **One Fo conversation per dealer** (`newConversation: true` on the first send; store the id). Calls to that dealer go in the same conversation.
+- **Serial send queue.** One `ask_fo` turn at a time per account (spike + spec). Calls and emails share the queue.
+- **No duplicate sends or calls.** On timeout or `working`, poll `get_fo_reply`. Never resend `ask_fo` for the same `message_id`.
+- **Replies.** Gmail IMAP is the source of truth for written replies: `get_fo_conversation` on the email-channel conversation created by a vendor reply returned **0 turns** (VERIFIED twice). Fo CLAIMS replies "arrive back in this thread"; spike 1c watches the per-dealer conversation to test that. If it holds, it becomes a second read path, not a replacement.
+- **Webhook.** A `conversation.reply` webhook is DOCUMENTED in the separate Wajo agent MCP (`https://mcp.api.wajo.ai/mcp`, `register_webhook`), needs a public HTTPS URL, and carries Fo's final message (max 2,000 chars), not the dealer's raw email. Not used; polling stays.
+- **Token.** `auth.py` refreshes before expiry; refresh tokens rotate and are saved immediately.
 
-## 6. Status
+Adapter implementation details: run one process with one persistent state file per account. Its account lock covers reservation, the whole Fo turn, configured Gmail auditing and final status; state is reloaded inside the lock and written by atomic replacement. Message keys include job/run/message and a payload fingerprint; conversation keys include job/run/dealer. IDs learned during polling are saved before answering a preview. Unresolved or flagged turns leave a persistent active marker requiring review. A single async owner task creates, uses, reconnects and closes the MCP session, so token rotation preserves SDK context ownership. Controlled live acceptance instructions are in `docs/fo_adapter.md` and `docs/sent_audit.md`; the new brief-mode send is prepared but not yet run.
 
-- Step 0 done (`e38de1f`).
-- Step 1 done: `sealed/core` (models, ledger, strategy, guard, events, engine), `sealed/private` (vault, secret checker, qualifier), `sealed/sim` (stand-in dealers, transport, runner), templates + call scripts in `sealed/fo/messages.py`. Current validation and hardening details are below. `mock/events.json` is now generated by the sim engine (`mock/build_mock.py`). Qualifier rule: a dealer flagged for a suspicious instruction is proposed only if no unflagged firm quote qualifies; the flag is shown either way.
+## 8. Changes vs the earlier design and API
 
-- Step 1 hardening completed: ledger firmness requires a matching configured sender, a finite positive total present in the dealer's actual text, matching currency and specification, and no hedge/decline. Only each dealer's latest sender-matched written reply is current; withdrawals and non-firm revisions retire older offers without erasing history. Unmatched senders and calls cannot replace a verified written offer.
-- Approval and booking hardening: a winning dealer's updated terms replace the pending proposal; stale approvals send nothing. Completion requires a sender-matched confirmation linked to a sent booking, with the exact approved amount, currency and delivery date. Mismatches raise blocking `booking_mismatch`; blocked or altered booking messages pause before other dealers are declined.
-- Guard hardening: check the entire outgoing payload for secrets and prices, verify the instruction wrapper and headers (`payload_integrity`), and accept only the exact preview payload with known confirmation wrappers. Unknown wrappers or added claims/actions require human review. Monetary templates preserve cents. The vault rejects non-finite or non-positive ceilings without echoing their values.
-- Validation after hardening: 154 tests; the generated car mock still completes with 91 events and passes `check_mock.py --secret 32000`. Regression tests cover revisions/withdrawals, unmatched senders, ungrounded totals, stale approvals, changed booking terms, preview additions, header/marker injection, mail line endings and prices with cents. Sender authentication results and inbound deduplication remain part of step 3.
-- Step 2 implementation and local validation completed (`sealed/fo/client.py`, `adapter.py`, and `smoke.py`); live acceptance remains pending. SDK `MCPError(REQUEST_TIMEOUT)` becomes `FoTimeout` and polls without resending. Reservation/replay checks run inside a shared account lock, reload current state, and atomically replace the versioned state file. Message IDs are scoped by job/run and bound to their payload; conversations are scoped by job/run/dealer. Late conversation IDs are persisted; mismatched IDs never receive confirmation. One async owner task manages the MCP session through token rotation and shutdown. Payment instructions outside the exact known body stop before confirmation; ambiguous/flagged turns pause the account across restarts. Backend suite: 208 tests, including the installed SDK's real timeout behavior over in-memory channels, duplicate races, storage failure, previews and session ownership. See `docs/fo_adapter.md` for the prepared dry-run email and the remaining live acceptance check. The earlier spike sends/calls do not complete that check. Actual Gmail sent-copy verification remains step 3.
+| Area | Earlier | New | Breaking for the dashboard? |
+|---|---|---|---|
+| Ceiling use | Strategy engine sees it; counters move toward it | Only the qualifier sees it; counters fixed at target | No |
+| `strategy.decided.offer` | Any number | Always equals `target` (or null) | No (same field) |
+| `guard.checked` | One per message | Can appear twice per message; add optional `stage: "pre_send" \| "fo_preview"` | No (new optional field) |
+| `message.sent` | Email only | Add optional `channel: "email" \| "call"`; `kind` unchanged; for calls `body` holds the sealed brief | No (new optional field) |
+| Email content (decision 16) | Exact template | Fo-composed draft; `brief` and `content_source` are added. Unknown delivered body is represented by empty `body`, never the brief. | UI should distinguish reviewed preview from delivered evidence. |
+| Email audit (decision 16) | Body equality | `basis: "brief_constraints"`: compliance with routing and authorized content; ordinary signatures allowed. | Field names stay; `matched` uses the declared basis. |
+| `job.needs_human` | — | New reason `call_review` with `flags: [{flag, speaker, excerpt}]` after a call | No (new value) |
+| `quote.parsed` | Written replies | A spoken price arrives with `firm: false` and `source: "call"` | No (new optional field) |
+| Message voice | "Hi …, Thank you, Het" | Written as Fo on the buyer's behalf | No |
+| Scenario | Hoodies | One car, `spec.quantity: 1`, `spec.details` = model/trim/color; prices are out-the-door totals | Mock data only |
+| `booking` | Order the item | "Proceed, please send paperwork" (no payment) | No |
+| Dashboard | Never sees ceiling | Shows the user's own ceiling and target; ceiling fetched from `GET /jobs/{id}/ceiling` only, never in events | No (new endpoint) |
+| Dealers | Typed in by the user | Typed in, or discovered (`POST /dealers/discover`, 20-mile radius in v1; 10/50 later) and picked by the user | No (new endpoint; optional `zip`, vendor `phone`, `source`) |
 
-- Integrated teammate commit `9bce7a3`: phone-only initial calls, dealer source metadata, and learned reply addresses. Preserved step 1 sender checks: a phone-only address is learned only when trusted ingestion marks the dealer association (`Inbound.contact_verified`) and links the reply to this dealer's successful call. The parser cannot assert this evidence; implementing authenticated attribution is part of step 3. Combined suite: 165 tests.
+Everything else in `docs/api.md` stays as is.
 
-- Step 2 live read-only check passed on 2026-10-18: authenticated Fo access, two consecutive `list_fo_conversations` calls and clean session shutdown through `LiveFoClient`. Only status/count metadata was printed. The controlled outbound email acceptance check remains pending teammate approval; the ready-to-review dry run is `python -m sealed.fo.smoke --to rfb5381@psu.edu` from `backend/`.
+### Dealer discovery, step by step
 
-- First approved adapter send completed to `hfp5252@psu.edu` (`smoke_01`), verified against its Gmail CC copy. Recipient, CC and subject matched; Fo appended its own signature/social links, so strict body auditing flags `audit_mismatch` and the account remains paused for review. The initially ambiguous status was caused by the real reply starting "Sent,"; a regression check now recognizes it. The existing run was reconciled from Gmail evidence without another email. The teammate's reply has since arrived and passed the read-only ingestion acceptance check below.
+1. User enters car, spec and ZIP (radius fixed at 20 miles in v1).
+2. Backend submits a durable background research turn through existing Fo MCP, with no ceiling, target or buyer identity. The prompt forbids outreach, scheduling, private account access and documents. Fo's tool set is not mechanically restricted by this integration.
+3. Code independently fetches official HTTPS sources, checks published name/address/contact evidence and filters unsupported contacts. Redirect, public DNS, TLS and response-size checks constrain reads.
+4. Code looks up ZIP centroids through the public key-free Zippopotam.us API and computes approximate straight-line distances, dropping candidates outside 20 miles. There is no offline ZIP table. Inventory remains unconfirmed.
+5. Dashboard polls saved progress and lets the user select up to five sellers total. Job creation binds contacts and requirements to a checked result no older than one hour; outreach starts separately. Simulation uses synthetic candidates with no external clients.
 
-- Step 3, first part completed (2026-10-18): product Gmail ingestion in `sealed/ingest/` uses read-only UID search/fetch and `BODY.PEEK[]`, exact known-sender checks, Gmail DMARC alignment with recorded SPF/DKIM results, subject/thread association, quoted-history removal, bounded fetching and SQLite staging. Ambiguous/unauthenticated mail stays review-only. Repeated polls and restarts retain pending work without duplicating it; fetching never acknowledges a reply. No engine delivery or parser result is claimed yet. Phone-only sender attribution still requires reviewed identity evidence; it is never learned from a tag alone.
-- Live ingestion acceptance passed on the existing `smoke_01` reply: first poll staged one authenticated reply with the sample `$100.00 USD` total and real linkage to `rfq_01`; the second poll staged zero and suppressed one duplicate. One reply remains pending, zero require ingestion review. No email was sent, and the existing Fo audit warning was retained. Private bindings/database/acceptance counts are under gitignored `.sealed/`. Backend suite: 244 tests (36 new ingestion checks). Next: reusable sent-copy audit, then isolated quote parsing/validation and idempotent engine handoff with real Gmail evidence.
+See [Fo discovery operation, API and limits](dealer_discovery.md).
+Radius options **10 and 50 miles** are added after the core flow and dashboard are built; until then the API accepts only 20.
 
-- v0.3 (additive): itemised price breakdowns on `quote.parsed` (grounded in the dealer's text, sum-checked within $1, `breakdown_mismatch` flag), `message.sent.numbers` (source of every number), `job.completed.fee_comparison`. Mock dealers itemise; Harbor's first quote has a junk add-on (nitrogen-filled tires), Summit's parts don't add up.
+## 9. Open checks before building
+
+- Discovery: how many local dealers publish a sales email (vs contact forms only)? Dealers without one can only be called.
+
+- ~~A1: does `get_fo_conversation` on an `email` conversation include the dealer's reply?~~ No (0 turns, VERIFIED). Gmail IMAP is the read path.
+- Spike 1c: does Fo send a Fo-voice body verbatim, does the preview contain the full draft, and does the reply show up in the per-dealer Fo conversation (Fo's claim)?
+- Spike 1d: does a text request make Fo place a call, does it stay on the script (done: yes, mostly; see spike 1d), and does a transcript or summary come back through MCP?
+- `working` + `get_fo_reply` path: not yet observed (all turns so far returned `complete` in one call).
+
+
+## 10. Background coordinator implementation (2026-10-18)
+
+`sealed/service/coordinator.py` injects the Gmail reader, isolated extractor,
+private checker/qualifier callbacks and transport. It persists public checkpoints,
+outbox intents and timer claims; it never receives the private ceiling itself.
+A cycle polls and applies replies before dispatch and timer transitions. Missing
+private runtime, unavailable parsing, mail failures and uncertain sends block
+progress. Only the CLI composition root binds private callbacks; service logic
+may not import private modules. The private vault is restored through hidden
+terminal input after restart, never from a public checkpoint.
+
+The worker is an explicit CLI, not an automatically launched process. Its offline
+acceptance completes a synthetic $100-to-$90 negotiation through explicit approval
+and written confirmation, then verifies restart replay. HTTP/SSE and dashboard wiring are now implemented; reviewed reconciliation remains. See [coordinator usage and limits](coordinator.md).
+
+- Background coordinator implemented (2026-10-18): Gmail polling, authorized cached extraction, durable reply delivery, serialized guarded dispatch and once-only scheduled transitions now run through `sealed.service`. Poll failure, missing private runtime, review-only mail and uncertain send claims block progress. A single-worker OS lock, hidden interactive vault restoration, explicit model/email/call permissions, durable cancellation and exact-proposal approval are included. The offline acceptance completes $100 ? $90 ? simulated user approval ? written confirmation, then reopens databases without duplicate actions. Backend suite: 469 tests. No new live email or model request was made for this step. See `docs/coordinator.md`. Next: HTTP/SSE and dashboard wiring, review/reconciliation controls, then an explicitly authorized live end-to-end acceptance.
+
+- Local API/dashboard implemented (2026-10-18): public job creation/list/status, SSE replay and follow, explicitly authorized live start, exact-term approval/rejection, durable cancellation, private-vault restoration, call authorization and final evidence receipts now use the coordinator. The React dashboard supports manual sellers and the complete simulation, with live/sim labels and an in-memory-only ceiling. One executor owns SQLite and worker mutations; API and live CLI locks prevent competing workers. Request Origin/JSON checks and sanitized validation errors protect the local private endpoint. Chrome acceptance completed a synthetic $99 to $90 negotiation with 32 streamed events, explicit UI approval and written confirmation; desktop and mobile layouts passed, with no browser-storage entries. Backend: 491 tests; frontend build/lint pass. See `docs/dashboard.md`. Next: reviewed pause/send reconciliation controls, dealer discovery, and an explicitly authorized live end-to-end acceptance.
+
+
+- Fo-first dealer discovery implemented (2026-10-18): durable background research,
+  saved progress, one-hour cache, independent public HTTPS contact checks,
+  ZIP-centroid distances, checked dealer selection and API provenance binding.
+  Chrome acceptance found three synthetic candidates, selected one and completed
+  a $90 negotiation through explicit approval and written confirmation on desktop
+  and mobile, with no browser-storage entries. Backend: 528 tests; frontend
+  build/lint pass. Public ZIP lookup was checked separately. No new live Fo
+  acceptance or dealer outreach was performed. Remaining: reviewed reconciliation
+  controls and authorized live end-to-end acceptance. See `docs/dealer_discovery.md`.

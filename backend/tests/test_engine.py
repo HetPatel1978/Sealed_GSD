@@ -8,6 +8,8 @@ from sealed.core.engine import Engine, SendResult, StaleProposal
 from sealed.private import vault
 from sealed.private.qualifier import qualify
 from tests.helpers import FakeChecker, email, job
+from sealed.core.email_policy import format_draft
+from sealed.sim.email import compose
 
 
 class RecordingTransport:
@@ -18,10 +20,13 @@ class RecordingTransport:
 
     def send(self, now, msg, approve_preview):
         self.sent.append(msg)
-        copy = msg.body + " An extra instruction." if self.change_booking_copy and msg.kind == "booking" else msg.body
+        draft = compose(msg)
+        if not approve_preview(format_draft(draft)):
+            return SendResult(False, now)
+        copy = draft.body + " I paid a deposit." if self.change_booking_copy and msg.kind == "booking" else draft.body
         if self.crlf_copy:
             copy = copy.replace("\n", "\r\n")
-        return SendResult(True, now, sent_copy=copy)
+        return SendResult(True, now, sent_copy=copy, draft=draft)
 
 
 @pytest.fixture

@@ -9,6 +9,8 @@ import pytest
 from sealed.core.engine import Engine
 from sealed.core.models import Decision
 from sealed.core.guard import Guard
+from sealed.core.email_policy import format_draft
+from sealed.sim.email import compose
 from sealed.fo import messages
 from sealed.fo.adapter import CONFIRM_NO, CONFIRM_YES, FoTransport, classify
 from sealed.fo.client import FoTimeout
@@ -70,7 +72,7 @@ J = job()
 
 
 def msg(dealer="a", kind="rfq", channel="email", mid="m_01"):
-    return messages.build(J, Decision(dealer, "rfq", kind, channel=channel), mid, "SEALED-T0000001", "buyer@x.example")
+    return messages.build(J, Decision(dealer, "rfq", kind, channel=channel), mid, "SEALED-T0000001", "buyer@x.example", email_mode="exact")
 
 
 def ok(text):
@@ -167,13 +169,17 @@ def test_turns_are_serial_across_threads(store):
 
 
 def test_engine_runs_round_one_through_the_adapter(store):
-    fo = FakeFo([ok(SENT_1C)] * 3)
+    script = []
+    for index, dealer in enumerate(J.dealers, 1):
+        message = messages.build(J, Decision(dealer.id, "rfq", "rfq"), f"m_{index:02d}", "SEALED-T0000001", "buyer@x.example")
+        script.extend([ok(format_draft(compose(message))), ok(SENT_1C)])
+    fo = FakeFo(script)
     eng = Engine(J, FoTransport(fo, store), FakeChecker(), qualifier=None, cc="buyer@x.example", tag="SEALED-T0000001")
     eng.create(0)
     eng.start(0.1)
     sent = eng.log.of_type("message.sent")
     assert [e["vendor_id"] for e in sent] == ["a", "b", "c"]
-    assert all(cid is None for _, cid in fo.asks)                       # each dealer opens its own conversation
+    assert all(cid is None for _, cid in fo.asks[::2])                  # each dealer opens its own conversation
     assert not eng.log.of_type("audit.checked")                         # audit waits for the Gmail CC copy (step 3)
 
 
@@ -296,7 +302,7 @@ def test_payment_instructions_are_rejected_before_confirmation_even_if_callback_
 
 
 def test_verbatim_approved_booking_preview_is_not_mistaken_for_a_payment_action(store):
-    m = messages.build(J, Decision("a", "propose", "booking"), "booking", "TAG", "buyer@example.com", 30450)
+    m = messages.build(J, Decision("a", "propose", "booking"), "booking", "TAG", "buyer@example.com", 30450, email_mode="exact")
     fo = FakeFo([ok(m.body + " Good to send?"), ok("Sent.")])
     res = FoTransport(fo, store).send(0, m, lambda p: Guard(FakeChecker()).check(m, preview=p).passed)
     assert res.sent and res.reason_code is None and fo.asks[1][0] == CONFIRM_YES
