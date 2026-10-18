@@ -41,7 +41,7 @@ Why the endpoint is separate: the event log stays ceiling-free, so `mock/check_m
 ```
 
 ### POST /dealers/discover
-Finds dealers for the car within a radius of the ZIP. Claude (web search + web fetch, no other tools, never given the ceiling or target) proposes dealers; code then keeps only those whose contact details appear word for word on a fetched page and whose address ZIP is within the radius (offline ZIP-to-location distance check). **Nothing is contacted.** The user picks up to 5 results and sends them in `POST /jobs`.
+Finds dealers for the car within a radius of the ZIP. Fo proposes dealers first (one research-only turn); Claude (web search + web fetch, no other tools) is the backup if Fo fails or finds fewer than 3. Neither is ever given the ceiling or target. Code then fetches the pages itself and keeps only those whose contact details appear word for word on a fetched page and whose address ZIP is within the radius (offline ZIP-to-location distance check). **Nothing is contacted.** The user picks up to 5 results and sends them in `POST /jobs`.
 
 Request:
 ```json
@@ -57,14 +57,19 @@ Response `200`:
   "dealers": [
     { "name": "Valley Honda", "email": "sales@valleyhonda.example" | null, "phone": "+1-215-555-0101" | null,
       "website": "https://valleyhonda.example", "address": "3900 Chestnut St, Philadelphia, PA 19104",
-      "distance_miles": 4.2, "in_stock": true | false | null,
+      "distance_miles": 4.2, "in_stock": true | false | null, "found_by": "fo" | "claude",
       "source": { "kind": "discovery", "urls": ["https://valleyhonda.example/contact"] } }
   ],
-  "dropped": 3
+  "dropped": 3,
+  "search": { "primary": "fo", "fallback_used": true,
+              "fallback_reason": "fo_failed" | "fo_timeout" | "fo_unparsed" | "fo_acted" | "fo_not_configured" | "too_few" | null,
+              "warnings": [ { "code": "needs_human", "search": "fo", "message": "..." } ] }
 }
 ```
 - Every non-null `email`, `phone` and `address` appeared literally on one of `source.urls`. `in_stock: null` = not known.
-- `dropped`: how many Claude suggestions code removed (outside the radius, or details not found on a fetched page).
+- `found_by`, `search` (optional, v0.3): which search found each dealer, and whether the backup ran and why. A `needs_human` warning means Fo's reply suggested it contacted someone; its results were discarded.
+- Can take 1–2 minutes (one Fo turn plus page fetches); show a progress state.
+- `dropped`: how many suggestions code removed (outside the radius, or details not found on a fetched page).
 - A dealer with neither email nor phone is never returned. A dealer with no email can only be reached by call.
 - Errors: `422` validation; `503` `{ "error": "discovery_unavailable" }` if the search fails (the user can still type dealers in by hand).
 

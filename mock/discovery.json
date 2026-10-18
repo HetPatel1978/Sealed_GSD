@@ -11,6 +11,7 @@
       "address": "3900 Chestnut St, Philadelphia, PA 19104",
       "distance_miles": 0.6,
       "in_stock": true,
+      "found_by": "fo",
       "source": {
         "kind": "discovery",
         "urls": [
@@ -27,6 +28,7 @@
       "address": "1200 Baltimore Pike, Springfield, PA 19064",
       "distance_miles": 9.8,
       "in_stock": null,
+      "found_by": "fo",
       "source": {
         "kind": "discovery",
         "urls": [
@@ -42,6 +44,7 @@
       "address": "500 W Germantown Pike, Plymouth Meeting, PA 19462",
       "distance_miles": 14.1,
       "in_stock": false,
+      "found_by": "claude",
       "source": {
         "kind": "discovery",
         "urls": [
@@ -50,5 +53,11 @@
       }
     }
   ],
-  "dropped": 2
+  "dropped": 2,
+  "search": {
+    "primary": "fo",
+    "fallback_used": true,
+    "fallback_reason": "too_few",
+    "warnings": []
+  }
 }

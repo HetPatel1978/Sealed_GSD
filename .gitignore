@@ -41,3 +41,6 @@ spikes/logs/
 
 # Local planning doc (not for the repo)
 Sealed Final Build Plan.pdf
+
+# Frontend build output
+frontend/dist/

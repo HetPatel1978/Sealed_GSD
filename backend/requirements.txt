@@ -2,3 +2,6 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 pydantic>=2.7
 mcp>=2.3
+httpx>=0.27
+anthropic>=1.15  # dealer discovery backup (and the quote parser)
+pgeocode>=0.5  # ZIP distance; downloads its table once, then offline

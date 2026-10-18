@@ -17,9 +17,9 @@ Status: 2026-10-17 (Saturday). Design: `docs/architecture.md` (decided). Code fr
 | `backend/sealed/core/guard.py` + `private/secret_checker.py` | **Done (step 1)** | Rules: secret checker (number, words, ±2%), budget vocabulary, grounded leverage, commitment words, safety line. Stages `pre_send` and `fo_preview`. |
 | `backend/sealed/ingest/gmail.py` | **New** (from `spikes/gmail_read.py`) | Read-only IMAP; match by tag → In-Reply-To/References → sender + time; dedupe on message id; post-send audit of the CC copy. |
 | `backend/sealed/parser/quote.py` | **New** | Quarantined LLM → fixed record; code validates spec match, out-the-door total, grounding. |
-| `backend/sealed/discovery/dealers.py` | **New** | Claude (`web_search` + `web_fetch`, structured output; no ceiling, no target) → dealer records; code keeps details found literally on fetched pages, distance check with `pgeocode` (offline ZIP table), radius 20 only in v1. Add `anthropic` and `pgeocode` to `backend/requirements.txt` when built. |
+| `backend/sealed/discovery/` | **Done (step 6, decision 16)** | Fo first (`fo_finder.py`, one research-only turn), Claude backup (`claude_finder.py`, `web_search` + `web_fetch`, structured output); neither gets the ceiling or target. Code check for both (`verify.py` + our GET-only `fetch.py`): details found literally on fetched pages, distance with `pgeocode`, radius 20 only in v1. Order in `dealers.py`, `SEALED_DISCOVERY_ORDER`. |
 | `backend/sealed/core/events.py`, `store.py` | **New** | Append-only event log (SQLite), SSE replay by `Last-Event-ID`. |
-| `backend/tests/` | **Extend** | Unit tests per module + a full sim run test that greps every outgoing string and event for the ceiling; import test: only `qualifier`/`secret_checker` and the `GET /jobs/{id}/ceiling` route read the ceiling store; `JobView` never contains it; discovery prompt never contains ceiling or target; discovery drops details not found on a fetched page and dealers outside 20 miles. |
+| `backend/tests/` | **Extend** | Unit tests per module + a full sim run test that greps every outgoing string and event for the ceiling; import test: only `qualifier`/`secret_checker` and the `GET /jobs/{id}/ceiling` route read the ceiling store; `JobView` never contains it; discovery prompts never contain ceiling or target; discovery drops details not found on a fetched page and dealers outside 20 miles; each Fo failure (error, timeout, unreadable, acted, too few) falls back to Claude; the fetcher only GETs and refuses local hosts (`tests/test_discovery.py`). |
 | `docs/api.md` | **Change** | v0.2 optional fields + v0.3 ceiling endpoint and discovery (section 2). Done. |
 | `mock/build_mock.py`, `mock/events.json` | **Rewrite** | Car scenario; offers only target or null; includes a call nudge, a spoken price (`firm: false`), a `fo_preview` guard check. |
 | `mock/check_mock.py` | **Change** | Also assert `strategy.decided.offer ∈ {target, null}`; allow the new optional fields. |
@@ -56,24 +56,24 @@ Status: 2026-10-17 (Saturday). Design: `docs/architecture.md` (decided). Code fr
 | — | **Decision: real dealers vs stand-ins** | — | **Sun 12:00** | |
 | 4 | Calls: round-1 nudge to non-responders, round-2 call, through the same adapter and queue; call summary → `reply.received` (source `call`) | 2 h | Sun 12:00–14:00 | One call to a team member's own phone through the adapter |
 | 5 | SSE + routes matching `docs/api.md` (incl. `GET /jobs/{id}/ceiling`); dashboard switches from mock to live | 3 h | Sun 14:00–17:00 | Dashboard shows a live sim run with target + ceiling displayed |
-| 6 | Dealer discovery: `POST /dealers/discover` (option A Claude or option B Fo, see below; code check + distance check, 20 mi) + dealer picker in the dashboard | 2 h | Sun 17:00–18:00 | Search for the demo car near the demo ZIP returns verified dealers within 20 miles |
+| 6 | Dealer discovery: `POST /dealers/discover` (Fo first, Claude backup, see below; code check + distance check, 20 mi) + dealer picker in the dashboard | 3 h | Sun 17:00–18:00 | Search for the demo car near the demo ZIP returns verified dealers within 20 miles |
 | — | End-to-end run, README, tests green, freeze | 1 h | Sun 18:00–19:00 | Freeze |
 | later | Radius options 10 / 50 miles (API + dashboard selector), only after the core flow and dashboard are built | 0.5 h | after freeze | `radius_miles` accepts 10, 20, 50 |
 | — | Demo video + X post draft | — | Sun night | Posted by Mon 10:15 ET |
 
 The dashboard can be built against the mock (`events.json`, `ceiling.json`, `discovery.json`) from step 0 onward; SSE wiring lands in step 5.
 
-### Step 6 options: who finds the dealers (not built yet; choose before step 6)
+### Step 6: who finds the dealers (decided: B first, A as backup — decision 16)
 
-Both options end in the same code checks, and neither ever gets the ceiling or the target.
+Both searches end in the same code check (our own fetch of the pages), and neither ever gets the ceiling or the target. Claude runs only if Fo fails, times out, is unreadable, appears to have acted, or leaves fewer than 3 verified dealers.
 
-| | Option A: Claude (decision 14) | Option B: Fo |
+| | Option A: Claude (backup) | Option B: Fo (primary) |
 |---|---|---|
 | How | Claude Messages API with `web_search` + `web_fetch` server tools, structured output: dealers of the exact car near the ZIP, with name, website, sales email, phone, address and the pages each came from. | One `ask_fo` turn in a **new** conversation: "Find franchise dealers for [exact car] within 20 miles of ZIP [zip]. For each, give the name, website URL, sales email and phone. Don't contact anyone." Fo returns free text; code extracts the fields. |
-| Code check | Each email / phone / address must appear word for word in the page text from Claude's own `web_fetch` results; distance from the address ZIP with an offline ZIP table (`pgeocode`); drop outside 20 mi. | **Code fetches each URL itself** (plain HTTP GET, read-only) and keeps an email / phone / address only if it appears word for word on that page; same distance check; drop outside 20 mi. |
+| Code check | Same as B: code fetches the pages itself (one check path for both); distance from the address ZIP with an offline ZIP table (`pgeocode`); drop outside 20 mi. | **Code fetches each URL itself** (plain HTTP GET, read-only) and keeps an email / phone / address only if it appears word for word on that page; same distance check; drop outside 20 mi. |
 | Pros | Structured output; the page text comes back in the same response; one API key we already plan for the parser. | Uses Fo (the hackathon's tool); no extra prompt engineering for tools; Fo may know local dealers well. |
 | Cons / risks | Web search has no real radius (the distance check fixes that). | Free text (needs parsing); slower (~20–50 s per turn, serial queue shared with sends); Fo might act beyond "find" (the prompt says contact no one, and the turn is checked like any other: a reply that suggests it contacted someone raises `needs_human`); Fo remembers across conversations, so the request must contain only the car and ZIP. Our own fetcher must handle robots/blocked pages and never submit forms. |
-| Status | Planned (decision 14). | Option, not built. |
+| Status | Built as the backup (`claude_finder.py`). | Built as the primary (`fo_finder.py`). |
 
 ## 4. Cut list (in cut order)
 

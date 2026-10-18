@@ -30,4 +30,4 @@ Ceiling rules for the dashboard:
 - Any "best quote vs ceiling" comparison is computed here and never sent anywhere.
 - Show a one-line reminder: never tell Fo your ceiling (Fo remembers across chats).
 
-Discovered dealers are suggestions: show distance and source links, label them "found by AI, check before contacting", and contact no one until the user picks them.
+Discovered dealers are suggestions: show distance and source links, label them by `found_by` ("found by Fo" / "found by AI"), "check before contacting", show any `search.warnings`, and contact no one until the user picks them.

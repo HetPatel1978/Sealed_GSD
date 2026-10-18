@@ -16,7 +16,7 @@ So the ceiling cannot leak through what we send or say, even indirectly ("offer 
 
 The user can **see their own ceiling and target on the dashboard**. The ceiling reaches the dashboard through one private endpoint (`GET /jobs/{id}/ceiling`), never through events, so the event log and everything sent to Fo stay ceiling-free. Fo, dealers and every LLM never see it.
 
-Dealers can be **typed in by the user or discovered**: Claude (web search + web fetch only) suggests dealers for the car near the user's ZIP, code keeps only those within the radius (20 miles in v1) whose contact details appear word for word on a fetched page, and the user picks up to 5. Discovery contacts no one.
+Dealers can be **typed in by the user or discovered**: Fo (one research-only turn) suggests dealers, with Claude (web search + web fetch only) as the backup, for the car near the user's ZIP, code keeps only those within the radius (20 miles in v1) whose contact details appear word for word on a fetched page, and the user picks up to 5. Discovery contacts no one.
 
 Calls are a core channel with two jobs: nudge silent dealers to send a written quote, and carry the true lowest written total to a dealer in round 2. **A spoken price is never a firm quote**; only written replies enter the ledger as firm.
 
@@ -34,8 +34,8 @@ flowchart TB
     end
 
     subgraph DISC["Dealer discovery — never sees ceiling or target"]
-        FIND["Claude: web search + web fetch<br/>no other tools"]
-        DCHECK["Code checks<br/>details on fetched page; ZIP distance ≤ radius (20 mi)"]
+        FIND["1. Fo: one research-only turn, new conversation<br/>2. Claude backup: web search + web fetch, no other tools"]
+        DCHECK["Code checks (both searches)<br/>our own GET of the pages; details on page; ZIP distance ≤ radius (20 mi)"]
     end
 
     subgraph PRIVATE["Private zone (backend only)"]
@@ -94,7 +94,7 @@ flowchart TB
 | Component | Ceiling | Target | Dealer quotes | Notes |
 |---|---|---|---|---|
 | Dashboard (the user's own screen) | **Yes, display only** (`GET /jobs/{id}/ceiling`) | Yes | Yes | Never in events/SSE; never stored in `localStorage` or URLs; never sent on in any request. |
-| Dealer discovery (Claude) | **No** | **No** | No | Gets only car, ZIP, radius. Web search + web fetch, no send tools. Output is a fixed record checked by code. |
+| Dealer discovery (Fo first, Claude backup) | **No** | **No** | No | Gets only car, ZIP, radius. Fo is told to contact no one (a reply suggesting it did is discarded and flagged); Claude has web search + web fetch only. Both outputs are claims checked by code against pages we fetch ourselves. |
 | Ceiling vault | **Yes** | — | — | Backend memory/env only. Not logged. |
 | Secret checker | **Yes** | — | — | Text in, yes/no out. Defence in depth. |
 | Qualifier | **Yes** | Yes | Best firm quote only | Outputs `propose` or `needs_human`. Runs once, after the fixed rounds. |
@@ -170,7 +170,7 @@ sequenceDiagram
 2. **Sealed → Fo.** Only template text and call briefs cross. Fo's preview is checked at the confirmation step; the sent email copy is audited after. Fo claims durable memory across conversations, so the rule "never mention a budget to Fo, in any form" covers every chat, test and manual use of the account.
 3. **Dealers → Sealed.** Written replies and call summaries are untrusted. They become a fixed record validated by code and never reach Fo or any prompt that can act. `suspicious_instructions` raises a flag.
 4. **Dashboard.** The ceiling crosses to the browser only on `GET /jobs/{id}/ceiling` (`no-store`). The dashboard never talks to Fo, so showing the ceiling there gives Fo no path to it. Shown on screen means visible to anyone looking at it (e.g. a recorded demo); that is the user's choice.
-5. **Dealer websites → discovery.** Web pages are untrusted (could contain instructions or wrong details). Discovery has no tools that act, no ceiling, no target; code keeps an email/phone/address only if it appears literally on a fetched page, recomputes the distance from the address ZIP, and the user picks who is contacted.
+5. **Dealer websites → discovery.** Web pages are untrusted (could contain instructions or wrong details). Neither search gets the ceiling or the target; Claude has no tools that act, and Fo's discovery turn is research-only in a fresh conversation (a reply suggesting it contacted someone is discarded and flagged). Our own fetcher is GET-only, refuses local/private hosts and honours robots.txt; code keeps an email/phone/address only if it appears literally on a fetched page, recomputes the distance from the address ZIP, and the user picks who is contacted.
 6. **Calls.** A call **cannot leak the ceiling**: Fo never has it, and the brief contains only ledger facts. Fo runs the conversation in its own words inside a **sealed brief**: a goal (get a written total emailed), the only facts it may use, and fixed hard limits (say it's an AI assistant; no agreeing, reserving, ordering or paying; no payment details; no numbers outside the brief; no follow-ups; questions about spending or deposits get one fixed answer). The guard checks the brief before the call. After the call, the **post-call review** reads the voice transcript and flags any number Fo said that isn't in the brief, any commitment wording from Fo, and any mention of budget, deposit or payment by either side; flags raise `job.needs_human` (`call_review`). Only written quotes count; spoken prices stay `firm: false`. Call recording/consent is the user's responsibility under Wajo's terms; see `docs/threat_model.md`.
 
 ## 7. Fo-specific decisions (from spikes and the official spec)
@@ -204,10 +204,11 @@ Everything else in `docs/api.md` stays as is.
 ### Dealer discovery, step by step
 
 1. User enters car, spec and ZIP (radius fixed at 20 miles in v1).
-2. Backend asks Claude (Messages API, `web_search` + `web_fetch` server tools, structured output) for franchise dealers of that make near the ZIP: name, website, sales email, phone, street address, and whether the exact trim/color is listed in stock, each with the page it came from. The prompt contains no ceiling and no target.
-3. Code checks Claude's record against the page text returned in the `web_fetch` results of the same response: each email/phone/address must appear literally on the page Claude cited, or that field is dropped.
-4. Code computes distance from the user's ZIP to the address ZIP with an offline ZIP-to-location table (e.g. `pgeocode`) and drops dealers outside the radius. Dealers with neither email nor phone are dropped.
-5. Dashboard shows the list with distance and source links, labelled "found by AI, check before contacting". The user ticks up to 5 (and can still add dealers by hand). Then the normal flow starts.
+2. Backend asks **Fo first** (`sealed/discovery/fo_finder.py`): one `ask_fo` turn in a new conversation, holding the account-wide Fo lock, with a 90 s budget. The request holds only the car, the ZIP and the radius, says to contact no one, and asks for one `name | website | email | phone | address | page URL` line per dealer.
+3. **Claude is the backup** (`claude_finder.py`: Messages API, `web_search` + `web_fetch` server tools, structured output). It runs if Fo fails, times out, gives no readable lines, isn't connected, replies in a way that suggests it contacted someone or mentions money (results discarded, `needs_human` warning), or if fewer than 3 dealers survive step 4. Its results are merged with Fo's (deduped by domain or phone). `SEALED_DISCOVERY_ORDER` changes the order (`fo,claude` by default).
+4. Code checks every suggestion the same way (`verify.py`), whichever search made it: our own read-only fetcher (`fetch.py`) GETs the cited page, the home page and `/contact`, and each email/phone/address must appear literally on one of them, or that field is dropped.
+5. Code computes distance from the user's ZIP to the address ZIP with an offline ZIP-to-location table (`pgeocode`) and drops dealers outside the radius or without a verified address. Dealers with neither email nor phone are dropped.
+6. Dashboard shows the list with distance and source links, labelled "found by Fo" or "found by AI" (`found_by`), "check before contacting". The user ticks up to 5 (and can still add dealers by hand). Then the normal flow starts.
 
 Radius options **10 and 50 miles** are added after the core flow and dashboard are built; until then the API accepts only 20.
 

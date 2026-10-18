@@ -34,6 +34,9 @@ QUESTION = re.compile(r"\?\s*$|\b(good to send|want me to|should i|shall i|ok to
                       r"ready to send|go ahead)\b", re.I)
 MONEY_ACTION = re.compile(r"\b(payment|paid|purchas\w*|charged|checkout|order (placed|confirmed)|deposit)\b", re.I)
 
+# One ask_fo turn at a time for the whole account: sends, calls and dealer discovery all take this lock.
+FO_TURN_LOCK = threading.Lock()
+
 
 def classify(text: str) -> str:
     """'sent' | 'refused' | 'question' | 'unclear'. Conservative: anything not clearly sent isn't sent."""
@@ -75,10 +78,11 @@ class Store:
 
 class FoTransport:
     def __init__(self, client: FoClient, store_path: Path, poll_limit_s: float = POLL_LIMIT_S,
-                 clock: Callable[[], float] = time.monotonic, wait_seconds: int = 40):
+                 clock: Callable[[], float] = time.monotonic, wait_seconds: int = 40,
+                 lock: threading.Lock = FO_TURN_LOCK):
         self.client, self.store = client, Store(store_path)
         self.poll_limit_s, self.clock, self.wait_seconds = poll_limit_s, clock, wait_seconds
-        self._lock = threading.Lock()
+        self._lock = lock
         self.transcript: list[dict] = []     # every raw Fo result, for logs and debugging
 
     def send(self, now: float, msg: Outbound, approve_preview: Callable[[str], bool]) -> SendResult:
@@ -131,29 +135,11 @@ class FoTransport:
 
     # ---- helpers -------------------------------------------------------------------------------------
     def _ask(self, message: str, cid: str | None, errors: list[dict]) -> dict:
-        try:
-            res = self.client.ask(message, cid)
-        except FoTimeout as e:
-            errors.append({"code": "fo_turn_timeout", "retryable": True, "resent": False,
-                           "message": f"{e}. Polling get_fo_reply; not resent."})
-            res = {"status": "working", "conversationId": cid}
-        self.transcript.append({"tool": "ask_fo", "message": message, "result": res})
-        return res
+        return ask_turn(self.client, message, cid, errors, self.transcript)
 
     def _settle(self, res: dict, cid: str | None, errors: list[dict]) -> dict:
-        start = self.clock()
-        cid = res.get("conversationId") or cid
-        while res.get("status") == "working":
-            if self.clock() - start > self.poll_limit_s:
-                errors.append({"code": "fo_still_working", "retryable": False, "resent": False,
-                               "message": "Fo is still working after the poll limit. Not resent; please check."})
-                return {"status": "still_working", "conversationId": cid}
-            try:
-                res = self.client.reply(cid, self.wait_seconds)
-            except FoTimeout:
-                continue
-            self.transcript.append({"tool": "get_fo_reply", "result": res})
-        return res
+        return settle_turn(self.client, res, cid, errors, self.transcript,
+                           self.poll_limit_s, self.clock, self.wait_seconds)
 
     @staticmethod
     def _outcome(res: dict) -> tuple[str, str]:
@@ -163,3 +149,34 @@ class FoTransport:
         if status == "still_working":
             return "still_working", text
         return classify(text), text
+
+
+# ---- one Fo turn (shared with sealed.discovery.fo_finder) ----------------------------------------------
+def ask_turn(client: FoClient, message: str, cid: str | None, errors: list[dict], transcript: list[dict]) -> dict:
+    """ask_fo once. A timeout is recorded and treated as `working` (poll next, never resend)."""
+    try:
+        res = client.ask(message, cid)
+    except FoTimeout as e:
+        errors.append({"code": "fo_turn_timeout", "retryable": True, "resent": False,
+                       "message": f"{e}. Polling get_fo_reply; not resent."})
+        res = {"status": "working", "conversationId": cid}
+    transcript.append({"tool": "ask_fo", "message": message, "result": res})
+    return res
+
+
+def settle_turn(client: FoClient, res: dict, cid: str | None, errors: list[dict], transcript: list[dict],
+                poll_limit_s: float, clock: Callable[[], float], wait_seconds: int) -> dict:
+    """Polls get_fo_reply while Fo is `working`, up to poll_limit_s; then returns status `still_working`."""
+    start = clock()
+    cid = res.get("conversationId") or cid
+    while res.get("status") == "working":
+        if clock() - start > poll_limit_s:
+            errors.append({"code": "fo_still_working", "retryable": False, "resent": False,
+                           "message": "Fo is still working after the poll limit. Not resent; please check."})
+            return {"status": "still_working", "conversationId": cid}
+        try:
+            res = client.reply(cid, wait_seconds)
+        except FoTimeout:
+            continue
+        transcript.append({"tool": "get_fo_reply", "result": res})
+    return res
