@@ -1,7 +1,7 @@
 """Spike 1a: call Fo MCP directly from Python with OAuth (mcp SDK 2.x, streamable HTTP).
 
 Run from the repo root with the backend venv:
-    backend/.venv/Scripts/python -u spikes/fo_oauth.py
+    .venv/bin/python -u spikes/fo_oauth.py
 
 First run opens a browser for Wajo sign-in; tokens are saved to .fo_oauth.json (gitignored)
 and reused on later runs. Sends ONE harmless message to Fo in a new conversation.

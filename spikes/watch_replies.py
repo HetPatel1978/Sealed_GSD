@@ -4,7 +4,7 @@
   - Fo MCP: new turns in the dealer's Fo conversation (Fo CLAIMS replies arrive there), and any new
     conversation (e.g. an email-channel one) with its transcript.
 
-    backend/.venv/Scripts/python -u spikes/watch_replies.py --tag SEALED-XXXXXXXX --minutes 25
+    .venv/bin/python -u spikes/watch_replies.py --tag SEALED-XXXXXXXX --minutes 25
 
 Log: spikes/logs/watch_<tag>.json (gitignored).
 """

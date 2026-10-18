@@ -1,6 +1,6 @@
 """Spike 1b: one real email through Fo (to the teammate only) + a concurrent harmless question.
 
-    backend/.venv/Scripts/python -u spikes/fo_send_test.py
+    .venv/bin/python -u spikes/fo_send_test.py
 
 Logs every raw request/response to spikes/logs/send_<tag>.json (gitignored).
 Never put a budget, ceiling or price in anything sent to Fo.

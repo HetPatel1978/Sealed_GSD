@@ -1,6 +1,6 @@
 """T2: ask Fo about itself in ONE new conversation. No sends, no actions.
 
-    backend/.venv/Scripts/python -u spikes/fo_ask_self.py
+    .venv/bin/python -u spikes/fo_ask_self.py
 
 Exercises the get_fo_reply path if the turn goes "working". Log: spikes/logs/ask_self.json (gitignored).
 """

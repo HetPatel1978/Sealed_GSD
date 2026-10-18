@@ -1,6 +1,6 @@
 """Checks Fo token refresh without a browser, then proves the new token works with a read-only call.
 
-    backend/.venv/Scripts/python -u spikes/token_refresh.py [--force]
+    .venv/bin/python -u spikes/token_refresh.py [--force]
 
 Refreshes only if the token is expired or within 5 minutes of expiry, unless --force.
 """
