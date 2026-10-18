@@ -1,0 +1,26 @@
+/* Base styles only. The dashboard's design goes on top of this. */
+:root {
+  --text: #1f1d24;
+  --bg: #ffffff;
+  font: 16px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #ecebf0;
+    --bg: #16151a;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
