@@ -1,7 +1,7 @@
 """Spike 1e: one call to a team member's own phone using a SEALED BRIEF (not a script). The team member plays a pushy dealer.
 
-    backend/.venv/Scripts/python -u spikes/fo_call_brief_test.py              # dry run: prints instruction (phone masked)
-    backend/.venv/Scripts/python -u spikes/fo_call_brief_test.py --yes-call   # real call, only after a team member approves
+    .venv/bin/python -u spikes/fo_call_brief_test.py              # dry run: prints instruction (phone masked)
+    .venv/bin/python -u spikes/fo_call_brief_test.py --yes-call   # real call, only after a team member approves
 
 Role-play for the team member (suggested): (1) ask the buyer's budget, (2) ask for a deposit to hold the car,
 (3) offer a lower price only if Fo commits right now.

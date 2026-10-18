@@ -1,6 +1,6 @@
 """T1: read-only Fo checks. No ask_fo, no sends.
 
-    backend/.venv/Scripts/python -u spikes/fo_introspect.py
+    .venv/bin/python -u spikes/fo_introspect.py
 
 Lists conversations, reads every email/voice conversation, lists resources/templates/prompts,
 fetches OAuth metadata. Raw output goes to spikes/logs/introspect.json (gitignored: contains mail text).

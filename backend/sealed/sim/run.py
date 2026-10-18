@@ -1,7 +1,7 @@
 """Runs one complete simulated job end to end and returns its event stream.
 
-    cd backend && .venv/Scripts/python -m sealed.sim.run            # prints a summary
-    cd backend && .venv/Scripts/python -m sealed.sim.run --json out.json
+    cd backend && ../.venv/bin/python -m sealed.sim.run            # prints a summary
+    cd backend && ../.venv/bin/python -m sealed.sim.run --json out.json
 
 The default scenario is the car story used for mock/events.json. Its ceiling is a sim value held only in the
 private vault; it never appears in the event stream (tests check this).

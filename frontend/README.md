@@ -1,6 +1,22 @@
 # frontend/
 
-The Sealed dashboard.
+The Sealed dashboard: React + TypeScript, built with Vite.
+
+## Run it
+
+Needs Node.js 20+ (`brew install node` on macOS).
+
+```bash
+cd frontend
+npm install        # once, and after package.json changes
+npm run dev        # http://localhost:3000 (fixed port: the backend only accepts this origin)
+npm run build      # type-check + production build into dist/
+npm run lint
+```
+
+Settings: copy `.env.example` to `.env.local` (gitignored). `VITE_DATA_SOURCE=mock` replays `../mock/*.json`; `live` talks to the backend at `VITE_API_BASE` (start it with `python -m app.run` in `backend/`). Only `VITE_*` values reach the browser, so never put secrets there.
+
+Layout: `src/config.ts` (settings), `src/App.tsx` (placeholder that checks `/health`; replaced by the real screens), `vite.config.ts` (port 3000, `@mock` alias for `../mock`).
 
 Build against `../docs/api.md` (v0.3). Until the backend is live:
 - replay `../mock/events.json` as a fake SSE stream,
