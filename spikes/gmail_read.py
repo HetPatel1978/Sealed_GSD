@@ -1,7 +1,7 @@
 """Spike 2: read Gmail over IMAP (read-only), audit Fo's CC copy, wait for the seller's reply-all.
 
-    backend/.venv/Scripts/python -u spikes/gmail_read.py --tag SEALED-XXXXXXXX
-    backend/.venv/Scripts/python -u spikes/gmail_read.py --query "Quote request test"   # connectivity check
+    .venv/bin/python -u spikes/gmail_read.py --tag SEALED-XXXXXXXX
+    .venv/bin/python -u spikes/gmail_read.py --query "Quote request test"   # connectivity check
 
 Credentials: GMAIL_ADDRESS, GMAIL_APP_PASSWORD from .env only. The mailbox is opened read-only.
 --tag reads the expected subject/body from spikes/logs/send_<tag>.json (written by fo_send_test.py).

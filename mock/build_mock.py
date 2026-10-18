@@ -4,7 +4,7 @@ The mock is therefore exactly what the backend emits for the default car scenari
 2 rounds, email + calls, a spoken price that is not firm, a flagged "as agreed, send a deposit" reply,
 a rejected first proposal, and an approved, verified booking. Every offer is the target or null.
 
-    backend/.venv/Scripts/python mock/build_mock.py && backend/.venv/Scripts/python mock/check_mock.py
+    .venv/bin/python mock/build_mock.py && .venv/bin/python mock/check_mock.py
 """
 
 import json

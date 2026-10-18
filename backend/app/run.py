@@ -1,4 +1,4 @@
-"""Start the backend on loopback only:  cd backend && .venv/Scripts/python -m app.run
+"""Start the backend on loopback only:  cd backend && ../.venv/bin/python -m app.run
 
 SEALED_HOST (default 127.0.0.1) must be a loopback address; SEALED_PORT defaults to 8000.
 """

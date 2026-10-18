@@ -1,7 +1,7 @@
 """Spike 1d: ask Fo to place ONE outbound call to a team member's own phone and read a short, true, non-price script.
 
-    backend/.venv/Scripts/python -u spikes/fo_call_test.py              # dry run: prints the instruction (phone masked)
-    backend/.venv/Scripts/python -u spikes/fo_call_test.py --yes-call   # real call (only after a team member approves)
+    .venv/bin/python -u spikes/fo_call_test.py              # dry run: prints the instruction (phone masked)
+    .venv/bin/python -u spikes/fo_call_test.py --yes-call   # real call (only after a team member approves)
 
 The phone number comes from SEALED_TEST_PHONE (set it in .env locally; never commit it).
 Measures: confirmation first? does the call happen? does Fo stay on the script or add claims? does a

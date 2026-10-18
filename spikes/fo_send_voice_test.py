@@ -1,7 +1,7 @@
 """Spike 1c: rerun the spike 1b email with a body written in Fo's own voice. Recipient: rfb5381@psu.edu only.
 
-    backend/.venv/Scripts/python -u spikes/fo_send_voice_test.py              # dry run: prints instruction + body
-    backend/.venv/Scripts/python -u spikes/fo_send_voice_test.py --yes-send   # real send (only after a team member approves)
+    .venv/bin/python -u spikes/fo_send_voice_test.py              # dry run: prints instruction + body
+    .venv/bin/python -u spikes/fo_send_voice_test.py --yes-send   # real send (only after a team member approves)
     ... --tag SEALED-XXXXXXXX --watch 15                                      # later: watch for the reply via MCP
 
 Measures:

@@ -21,15 +21,28 @@ spikes/    throwaway experiments, not product code
 
 ## Run the backend
 
-Python 3.11+.
+Python 3.11+. One venv at the repo root (`.venv/`, gitignored) covers the backend, `spikes/` and `mock/`. `requirements-dev.txt` pulls in `requirements.txt` plus test and spike dependencies.
 
-```powershell
+macOS / Linux:
+
+```bash
+python3.11 -m venv .venv            # any python 3.11+ (check with python3 --version)
+source .venv/bin/activate
+pip install -r backend/requirements-dev.txt
 cd backend
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
 python -m app.run          # binds to 127.0.0.1:8000 only (refuses any other host)
 # http://localhost:8000/health
+pytest
+```
+
+Windows (PowerShell):
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r backend\requirements-dev.txt
+cd backend
+python -m app.run
 pytest
 ```
 
