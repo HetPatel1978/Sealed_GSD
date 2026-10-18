@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { API_BASE, DATA_SOURCE } from './config'
 import { eventTypes, request } from './api'
@@ -6,9 +6,15 @@ import type { Health, Job, Receipt, SealedEvent } from './api'
 import mockEvents from '../../mock/events.json'
 import DealerSearch from './DealerSearch'
 import type { DealerSource, FoundDealer, Requirements } from './DealerSearch'
-
-const money = (value: number | null | undefined, currency = 'USD') => value == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value)
-const label = (value: string) => value.toLowerCase().replaceAll('_', ' ')
+import { buildActivity } from './activity'
+import CeilingMetric from './components/CeilingMetric'
+import DealerActivity from './components/DealerActivity'
+import EventFeed from './components/EventFeed'
+import FeeComparison from './components/FeeComparison'
+import QuoteEvidence from './components/QuoteEvidence'
+import ReviewAlerts from './components/ReviewAlerts'
+import TrustPanel from './components/TrustPanel'
+import { label, money } from './components/format'
 const deadlineDefault = () => new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
 
 export default function App() {
@@ -27,6 +33,9 @@ export default function App() {
   const [restoreValue, setRestoreValue] = useState('')
   const selectedId = useRef<string | null>(null)
   const mock = DATA_SOURCE === 'mock'
+  const activity = useMemo(() => buildActivity(mock ? mockEvents as SealedEvent[] : events), [mock, events])
+  const names = useMemo(() => new Map([...activity.dealers.map(d => [d.id, d.name] as [string, string]), ...(job?.vendors ?? []).map(v => [v.id, v.name] as [string, string])]), [activity, job?.vendors])
+  const proposalQuote = job?.proposal ? activity.quotes.get(job.proposal.quote_id) : undefined
 
   function selectJob(next: Job) {
     selectedId.current = next.id
@@ -115,22 +124,25 @@ export default function App() {
         <aside className="privacy"><span aria-hidden="true">◈</span><strong>Your ceiling stays private.</strong><p>Fo and sellers see your public target. Never tell Fo your ceiling; it remembers across chats.</p></aside>
       </section>
       {error && <div className="notice error" role="alert">{error}<button className="text-button" onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
-      {mock ? <section className="panel"><p className="eyebrow">MOCK PREVIEW · NO OUTREACH</p><h2>Recorded negotiation</h2><p>Switch VITE_DATA_SOURCE to live to create jobs using your backend. The backend’s simulation mode sends no real messages.</p><EventFeed events={mockEvents as SealedEvent[]} /></section> : <>
+      {mock ? <MockPreview activity={activity} names={names} events={mockEvents as SealedEvent[]} /> : <>
         <nav className="job-nav" aria-label="Jobs"><div>{jobs.length > 0 && <select aria-label="Select a job" value={job?.id ?? ''} disabled={busy} onChange={e => { const next = jobs.find(item => item.id === e.target.value); if (next) { selectJob(next); setError('') } }}>{jobs.map(item => <option key={item.id} value={item.id}>{item.item} · {label(item.state)}</option>)}</select>}</div><button className="secondary" disabled={busy || !health} onClick={() => setShowCreate(value => !value)}>{showCreate && job ? 'Back to job' : '+ New negotiation'}</button></nav>
         {showCreate ? <Intake mode={health?.mode ?? 'sim'} disabled={busy || !health} onCreate={data => act(async () => {
           const next = await request<Job>('/jobs', data)
           setJobs(old => [next, ...old]); selectJob(next)
         })} /> : job && <>
           <section className="panel job-overview"><div><p className="eyebrow">{job.mode === 'sim' ? 'SIMULATED NEGOTIATION · NO REAL OUTREACH' : 'LIVE NEGOTIATION'}</p><h2>{job.item}</h2><p className="muted">{job.spec.details}</p><p className="small">Delivery by {job.deadline} · Round {job.round} of 2 · <span className="connection">{connection}</span></p></div><span className={`badge ${job.state === 'COMPLETED' ? 'success' : ''}`}>{label(job.state)}</span></section>
-          <div className="metrics"><Metric name="Public target" value={money(job.target, job.currency)} /><Metric name="Your private ceiling" value={money(ceiling, job.currency)} /><Metric name="First firm quote" value={money(job.first_quote, job.currency)} /><Metric name="Proposed total" value={money(job.best_quote, job.currency)} /></div>
+          <div className="metrics"><Metric name="Public target" value={money(job.target, job.currency)} /><CeilingMetric ceiling={ceiling} currency={job.currency} /><Metric name="First firm quote" value={money(job.first_quote, job.currency)} /><Metric name="Proposed total" value={money(job.best_quote, job.currency)} /></div>
           {!job.ceiling_set && !['COMPLETED', 'CANCELLED'].includes(job.state) && <form className="notice restore" onSubmit={e => { e.preventDefault(); void act(async () => { await request(`/jobs/${job.id}/private-runtime`, { ceiling: Number(restoreValue) }); setCeiling(Number(restoreValue)); setRestoreValue('') }) }}><div><strong>Restore your private ceiling</strong><p>The backend restarted. Your ceiling was kept in memory and needs to be entered again.</p></div><input aria-label="Restore private ceiling" type="password" inputMode="decimal" autoComplete="off" value={restoreValue} onChange={e => setRestoreValue(e.target.value)} required /><button disabled={busy}>Restore</button></form>}
           {job.worker_status && ['mail_poll_failed', 'private_runtime_required', 'outreach_requires_reconciliation', 'needs_human', 'dispatch_authorization_required', 'fo_busy_research'].includes(job.worker_status) && <div className="notice" role="status">Worker: {label(job.worker_status)}. Review the latest events before proceeding.</div>}
+          <ReviewAlerts alerts={activity.alerts} names={names} />
           {job.state === 'CREATED' && !job.start_requested && <section className="panel start-panel"><h3>Ready when you are</h3><p>Starting contacts the selected sellers in live mode. Simulation uses synthetic replies.</p>{job.mode === 'live' && <><label className="check"><input type="checkbox" checked={liveConsent} onChange={e => setLiveConsent(e.target.checked)} />I authorize sending these sellers’ replies to Anthropic for parsing and guarded Fo email outreach for this job.</label>{job.vendors.some(v => v.phone) && <label className="check"><input type="checkbox" checked={callConsent} onChange={e => setCallConsent(e.target.checked)} />I also authorize negotiation calls to the selected sellers.</label>}</>}<button disabled={busy || !job.ceiling_set || (job.mode === 'live' && (!liveConsent || (job.vendors.some(v => !v.email) && !callConsent)))} onClick={() => void act(() => request(`/jobs/${job.id}/start`, { allow_model_requests: liveConsent, allow_dispatch: liveConsent, allow_calls: callConsent }))}>{busy ? 'Starting…' : job.mode === 'sim' ? 'Start simulation' : 'Start live negotiation'}</button></section>}
           {job.mode === 'live' && job.worker_status === 'dispatch_authorization_required' && <section className="panel"><h3>A scheduled call needs your permission</h3><p className="muted">The worker is waiting before contacting sellers by phone.</p><button disabled={busy} onClick={() => { if (window.confirm('Authorize negotiation calls to the selected sellers for this job?')) void act(() => request(`/jobs/${job.id}/allow-calls`, { allow_calls: true })) }}>Authorize calls and continue</button></section>}
-          {job.state === 'AWAITING_APPROVAL' && job.proposal && <section className="panel approval"><p className="eyebrow">YOUR DECISION</p><h2>Review the written offer</h2><p><strong>{job.vendors.find(v => v.id === job.proposal?.vendor_id)?.name}</strong> · {money(job.proposal.price_total, job.proposal.currency)} out-the-door · Delivery {job.proposal.delivery_date ?? 'not stated'}</p>{job.proposal.flags.length > 0 && <p className="warning">{job.proposal.flags.join(', ')}</p>}<p className="muted">Approval authorizes a request for purchase paperwork at these exact terms. Completion requires the seller’s written confirmation.</p><div className="actions"><button disabled={busy || !job.ceiling_set} onClick={() => { const p = job.proposal!; void act(() => request(`/jobs/${job.id}/approve`, { proposal_id: p.proposal_id, vendor_id: p.vendor_id, price_total: p.price_total, currency: p.currency, delivery_date: p.delivery_date })) }}>Approve {money(job.proposal.price_total, job.currency)}</button><button className="secondary" disabled={busy} onClick={() => void act(() => request(`/jobs/${job.id}/reject`, { proposal_id: job.proposal!.proposal_id }))}>Reject offer</button></div></section>}
+          {job.state === 'AWAITING_APPROVAL' && job.proposal && <section className="panel approval"><p className="eyebrow">YOUR DECISION</p><h2>Review the written offer</h2><p><strong>{job.vendors.find(v => v.id === job.proposal?.vendor_id)?.name}</strong> · {money(job.proposal.price_total, job.proposal.currency)} out-the-door · Delivery {job.proposal.delivery_date ?? 'not stated'}</p>{job.proposal.flags.length > 0 && <p className="warning">{job.proposal.flags.join(', ')}</p>}{proposalQuote && <QuoteEvidence quote={proposalQuote} reply={activity.replies.get(proposalQuote.reply_id)} currency={job.currency} />}<p className="muted">Approval authorizes a request for purchase paperwork at these exact terms. Completion requires the seller’s written confirmation.</p><div className="actions"><button disabled={busy || !job.ceiling_set} onClick={() => { const p = job.proposal!; void act(() => request(`/jobs/${job.id}/approve`, { proposal_id: p.proposal_id, vendor_id: p.vendor_id, price_total: p.price_total, currency: p.currency, delivery_date: p.delivery_date })) }}>Approve {money(job.proposal.price_total, job.currency)}</button><button className="secondary" disabled={busy} onClick={() => void act(() => request(`/jobs/${job.id}/reject`, { proposal_id: job.proposal!.proposal_id }))}>Reject offer</button></div></section>}
           <section className="panel"><div className="section-title"><h3>Seller comparison</h3><span className="small">Written terms only</span></div><div className="table-scroll"><table><thead><tr><th>Seller</th><th>Status</th><th>Latest total</th><th>Evidence</th></tr></thead><tbody>{job.vendors.map(vendor => <tr key={vendor.id}><td><strong>{vendor.name}</strong><small>{vendor.email ?? vendor.phone}</small></td><td>{label(vendor.state)}<small>{vendor.flags.join(', ')}</small></td><td>{money(vendor.latest_quote?.price_total, job.currency)}</td><td>{vendor.latest_quote ? vendor.latest_quote.firm ? 'Firm written quote' : 'Needs clarification' : 'Awaiting reply'}<small>{vendor.mode === 'sim' ? 'Synthetic evidence' : vendor.latest_quote?.verification === 'VERIFIED' ? 'Verified seller email' : ''}</small></td></tr>)}</tbody></table></div></section>
+          <DealerActivity activity={activity} currency={job.currency} states={new Map(job.vendors.map(v => [v.id, v.state]))} />
           {receipt && <section className="panel receipt"><p className="eyebrow">{receipt.mode === 'sim' ? 'SIMULATION COMPLETE' : 'WRITTEN CONFIRMATION RECEIVED'}</p><h2>{money(receipt.price_total, receipt.currency)} with {receipt.vendor_name}</h2><p>Saved {money(receipt.savings_abs, receipt.currency)} from the first firm quote. Delivery {receipt.delivery_date}.</p><ul>{receipt.evidence.map(item => <li key={item.ref}>{item.label}: <code>{item.ref}</code></li>)}</ul></section>}
-          <section className="panel"><div className="section-title"><h3>Negotiation activity</h3><span className="small">{job.mode} · {job.last_event_id} events</span></div><div className="trust"><span>{job.trust.messages_checked_before ?? 0} pre-send checks</span><span>{job.trust.messages_checked_after ?? 0} sent-copy checks</span><span>{job.trust.suspicious_instructions_flagged ?? 0} suspicious instructions flagged</span></div><EventFeed events={events} /></section>
+          {activity.fee_comparison && <FeeComparison rows={activity.fee_comparison} names={names} currency={job.currency} />}
+          <section className="panel"><div className="section-title"><h3>Negotiation activity</h3><span className="small">{job.mode} · {job.last_event_id} events</span></div><TrustPanel trust={job.trust} /><EventFeed events={events} names={names} /></section>
           <div className="actions footer-actions">{job.mode === 'sim' && ['RUNNING', 'BOOKING'].includes(job.state) && <button disabled={busy || !job.ceiling_set} onClick={() => void act(() => request('/sim/advance', { job_id: job.id, steps: -1 }))}>{busy ? 'Advancing…' : job.state === 'BOOKING' ? 'Simulate written confirmation' : 'Advance to next decision'}</button>}{!['COMPLETED', 'CANCELLED'].includes(job.state) && <button className="danger" disabled={busy} onClick={() => { if (window.confirm('Cancel this negotiation and stop queued outreach?')) void act(() => request(`/jobs/${job.id}/cancel`, {})) }}>Cancel negotiation</button>}</div>
         </>}
       </>}
@@ -143,8 +155,18 @@ function Metric({ name, value }: { name: string; value: string }) {
   return <div className="metric"><span>{name}</span><strong>{value}</strong></div>
 }
 
-function EventFeed({ events }: { events: SealedEvent[] }) {
-  return <div className="event-feed">{events.length === 0 ? <p className="muted">Waiting for job events…</p> : [...events].reverse().map(event => <details key={event.id} className="event"><summary><span className="event-id">{String(event.id).padStart(2, '0')}</span><strong>{event.type.replaceAll('.', ' · ').replaceAll('_', ' ')}</strong><span className="event-meta">{event.mode} · {new Date(event.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></summary><pre>{JSON.stringify(event.data, null, 2)}</pre></details>)}</div>
+function MockPreview({ activity, names, events }: { activity: ReturnType<typeof buildActivity>; names: Map<string, string>; events: SealedEvent[] }) {
+  const j = activity.job
+  const currency = j?.currency ?? 'USD'
+  const completed = events.find(e => e.type === 'job.completed')?.data as { first_quote?: number; best_quote?: number } | undefined
+  return <>
+    <section className="panel job-overview"><div><p className="eyebrow">MOCK PREVIEW · RECORDED SIMULATION · NO OUTREACH</p><h2>{j?.item ?? 'Recorded negotiation'}</h2><p className="muted">{j?.details}</p><p className="small">Delivery by {j?.deadline} · ZIP {j?.zip} · Switch VITE_DATA_SOURCE to live to create jobs using your backend.</p></div><span className="badge">recorded</span></section>
+    <div className="metrics"><Metric name="Public target" value={money(j?.target, currency)} /><Metric name="Your private ceiling" value="not in the event log" /><Metric name="First firm quote" value={money(completed?.first_quote, currency)} /><Metric name="Approved total" value={money(completed?.best_quote, currency)} /></div>
+    <ReviewAlerts alerts={activity.alerts} names={names} />
+    <DealerActivity activity={activity} currency={currency} />
+    {activity.fee_comparison && <FeeComparison rows={activity.fee_comparison} names={names} currency={currency} />}
+    <section className="panel"><div className="section-title"><h3>Negotiation activity</h3><span className="small">{events.length} events</span></div><TrustPanel trust={activity.trust} /><EventFeed events={events} names={names} /></section>
+  </>
 }
 
 function Intake({ mode, disabled, onCreate }: { mode: 'sim' | 'live'; disabled: boolean; onCreate: (body: unknown) => Promise<void> }) {

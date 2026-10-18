@@ -120,3 +120,59 @@ footer { border-top: 1px solid #dce1d4; color: #8a947f; font-size: 11px; padding
   .metric { padding: 18px; }
   .metric strong { font-size: 22px; }
 }
+
+/* Dealer activity, evidence, alerts, trust (dashboard v2) */
+.dealer-cards { display: flex; flex-direction: column; gap: 10px; }
+.dealer-card { border: 1px solid #e1e5db; border-radius: 8px; background: #fbfcf8; }
+.dealer-card > summary { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 18px; cursor: pointer; list-style: none; }
+.dealer-card > summary::-webkit-details-marker { display: none; }
+.dealer-card > summary small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.dealer-card-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; text-align: right; }
+.dealer-card-meta > strong { font-family: Manrope, sans-serif; font-size: 18px; }
+.dealer-card[open] > summary { border-bottom: 1px solid #e7ebe1; }
+.timeline { list-style: none; margin: 0; padding: 6px 18px 18px; }
+.timeline li { border-left: 2px solid #dfe6d4; padding: 12px 0 12px 16px; }
+.timeline li.reply { border-left-color: #b9cd95; }
+.timeline li.decision { border-left-color: #e3e6dc; }
+.timeline pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; background: #f5f7f0; padding: 12px 14px; border-radius: 6px; line-height: 1.6; color: #4f5f4a; margin: 8px 0; }
+.tl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.chip { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .4px; padding: 3px 8px; border-radius: 10px; background: #eef1e6; color: #5f6f4f; text-transform: uppercase; }
+.chip.email { background: #e8efe6; color: #2f5f45; }
+.chip.call { background: #f1ece0; color: #7a6334; }
+.chip.reply { background: #e6efd8; color: #4f6a2c; }
+.chip.warn { background: #fbf1dc; color: #8a6420; }
+.chip.bad { background: #f9e4dc; color: #93472e; }
+.chip.live { background: #f9e4dc; color: #93472e; }
+.chip.sim { background: #eef1e6; color: #6b7a5a; }
+.badge.warn { color: #8a6420; background: #fbf1dc; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.checks .ok { color: #3f7a52; }
+.checks .bad { color: #9b4a30; }
+.evidence { margin-top: 8px; }
+.evidence blockquote { margin: 6px 0 10px; padding: 10px 14px; border-left: 3px solid #b9cd95; background: #f7faf1; border-radius: 0 6px 6px 0; }
+.evidence blockquote p { font-size: 13px; margin-top: 4px; }
+table.breakdown { max-width: 420px; margin: 10px 0 4px; font-size: 12px; }
+table.breakdown td { padding: 6px 12px 6px 0; border-top: 1px solid #edf0e7; text-transform: none; }
+table.breakdown td:last-child { text-align: right; }
+table.breakdown tr.total td { font-weight: 700; border-top: 1px solid #cdd8ba; }
+.approval .evidence { background: #fff; border: 1px solid #d7e0c6; border-radius: 8px; padding: 12px 16px; margin-bottom: 18px; }
+.alerts { border-color: #e7d9b4; background: #fffcf3; }
+.alert { border-top: 1px solid #efe6cc; padding: 14px 0; }
+.alert:first-of-type { border-top: 0; }
+.alert.blocking { border-left: 3px solid #c97a5a; padding-left: 12px; }
+.alert p { font-size: 13px; margin-top: 6px; }
+.trust-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 22px; }
+.trust-item { border: 1px solid #e6eadf; border-radius: 8px; padding: 12px 14px; display: flex; align-items: baseline; gap: 10px; font-size: 12px; color: #6e7b6e; }
+.trust-item strong { font-family: Manrope, sans-serif; font-size: 20px; color: #243b32; }
+.trust-item.ok strong { color: #2e6e49; }
+.trust-item.bad { border-color: #eccfc2; background: #fcf1ed; }
+.trust-item.bad strong { color: #93472e; }
+.reveal { font-size: 10px; padding: 0 6px; margin-left: 4px; }
+.event summary .chip { flex-shrink: 0; }
+@media (max-width: 760px) {
+  .trust-grid { grid-template-columns: 1fr; }
+  .dealer-card > summary { flex-direction: column; align-items: flex-start; }
+  .dealer-card-meta { justify-content: flex-start; text-align: left; }
+}
+.event-feed .event summary strong { text-transform: none; }
+td.muted { text-transform: none; }

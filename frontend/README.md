@@ -16,7 +16,11 @@ npm run lint
 
 Settings: copy `.env.example` to `.env.local` (gitignored). `VITE_DATA_SOURCE=live` (default) talks to the backend; `mock` shows the read-only recorded activity preview. The API defaults to simulation, so using the API does not by itself authorize real outreach. The backend is at `VITE_API_BASE` (start it with `python -m app.run` in `backend/`). Only `VITE_*` values reach the browser, so never put secrets there.
 
-Layout: `src/config.ts` (settings), `src/App.tsx` (job intake, comparison, event stream, approvals and receipt), `src/api.ts` (typed API client), `vite.config.ts` (port 3000, `@mock` alias for `../mock`).
+Layout:
+- `src/App.tsx`: job intake, job view, SSE, approvals and receipt (the flow).
+- `src/activity.ts`: pure functions that turn the event stream into per-dealer activity, review alerts, fee comparison and one readable line per event. Used in both `live` and `mock` mode. Tests: `src/activity.test.ts` (`npm test`, runs on `mock/events.json`).
+- `src/components/`: `DealerActivity` (every email, call brief, reply and quote per dealer, with check results and where each number came from), `QuoteEvidence` (the dealer's own words + itemised breakdown; also on the approval screen), `ReviewAlerts` (`job.needs_human`), `TrustPanel` (all six trust counters), `FeeComparison`, `EventFeed`, `CeilingMetric` (hidden until "Show").
+- `src/api.ts` (typed API client), `src/DealerSearch.tsx` (find dealers), `src/config.ts` (settings), `vite.config.ts` (port 3000, `@mock` alias).
 
 See [dashboard startup and limits](../docs/dashboard.md) and the [API contract](../docs/api.md).
 The dashboard creates jobs, streams coordinator events through SSE, displays written
