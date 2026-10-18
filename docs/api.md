@@ -88,7 +88,7 @@ Request:
 ```
 - `ceiling`: required, must be `> target`. Stored in the private zone only; shown back only by `GET /jobs/{id}/ceiling`.
 - `max_rounds`: default 2. `vendors`: 1-5 entries; `mode` is `"live"` or `"sim"`.
-- Optional (v0.3): `zip`; per vendor `phone` (needed for calls) and `source` (`{ "kind": "manual" }` if typed in, or the `source` object from `POST /dealers/discover`). Each vendor needs an `email` or a `phone`.
+- Optional (v0.3): `zip`; per vendor `phone` (needed for calls) and `source` (`{ "kind": "manual" }` if typed in, or the `source` object from `POST /dealers/discover`). Each vendor needs an `email` or a `phone` (`422` otherwise). A phone-only vendor (`email: null`) gets the round-1 request as a call asking it to email the buyer; after its first written reply, later emails go to the address that reply came from. A phone-only vendor that never writes gets no email (and so no decline).
 
 Response `201`: a `JobView` (below). Errors: `422` validation (the message never echoes the ceiling value).
 
@@ -123,7 +123,8 @@ Response `200`: `JobView`
 {
   "id": "v_northstar",
   "name": "Northstar Apparel",
-  "email": "orders@northstar.example",
+  "email": "orders@northstar.example" | null,
+  "phone": "+1-555-0101" | null,
   "mode": "sim",
   "state": "CREATED | CONTACTED | QUOTE_RECEIVED | COUNTERED | FINAL_OFFER | SELECTED | APPROVED | BOOKING_SENT | ACCEPTED | VERIFIED | NO_REPLY | DECLINED | DISQUALIFIED | FAILED | NEEDS_HUMAN | CANCELLED",
   "latest_quote": {

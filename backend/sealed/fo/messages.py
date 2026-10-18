@@ -107,20 +107,25 @@ def email_body(job: Job, d: Decision, dealer_name: str, approved_price: float | 
     return hello + core + _sign(job)
 
 
-def call_brief(job: Job, d: Decision, dealer_name: str, reply_to: str) -> str:
-    """A sealed brief: goal, the only facts Fo may use, and fixed hard limits. Fo talks in its own words."""
+def call_brief(job: Job, d: Decision, dealer_name: str, reply_to: str, emailed: bool = True) -> str:
+    """A sealed brief: goal, the only facts Fo may use, and fixed hard limits. Fo talks in its own words.
+
+    `emailed` is False for a dealer we have no email address for (phone-only): the brief must not claim we emailed.
+    """
+    where = f"reply to the email we sent, or email {reply_to}" if emailed else f"email {reply_to}"
     facts = [
         f"- Introduce yourself: \"{DISCLOSURE} calling on behalf of {job.buyer}.\"",
         f"- The car: {job.details}",
         f"- The buyer's first name: {job.buyer}",
         f"- The buyer's ZIP: {job.zip}",
         f"- Timeline: {job.buyer} plans to buy {job.timeline}",
-        f"- Where to send the quote: reply to the email we sent, or email {reply_to}",
+        f"- Where to send the quote: {where}",
     ]
     if d.kind == "rfq":
         goal = (f"Get {dealer_name} to email a written out-the-door total for this exact car, including all fees, "
                 "taxes and add-ons.")
-        facts.append("- We emailed their internet sales team asking for an out-the-door total and have no reply yet.")
+        facts.append("- We emailed their internet sales team asking for an out-the-door total and have no reply yet."
+                     if emailed else "- This call is our first contact with them.")
     elif d.kind == "price_match":
         goal = (f"Tell {dealer_name} the lowest written out-the-door total so far, and ask them to email a revised "
                 "written total if they want to revise.")
@@ -172,19 +177,24 @@ def number_provenance(msg: Outbound, job: Job) -> list[dict]:
     return out
 
 
-def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_price: float | None = None) -> Outbound:
+def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_price: float | None = None,
+          email_to: str | None = None) -> Outbound:
+    """`email_to` overrides the dealer's email (a phone-only dealer's address, learned from its first written reply)."""
     dealer = job.dealer(d.dealer_id)
+    to = email_to or dealer.email
     allowed = {p for p in (d.own_price, d.cited_price, d.offer, approved_price) if p is not None}
     sources = price_sources(d, approved_price)
     if d.channel == "call":
-        body = call_brief(job, d, dealer.name, cc)
+        body = call_brief(job, d, dealer.name, cc, emailed=bool(to))
         return Outbound(message_id, d.dealer_id, d.kind, "call", d.round, dealer.phone or "", None, body,
                         wrap_call_for_fo(dealer.name, dealer.phone or "", body), d.offer, d.cited_quote_id,
                         frozenset(allowed), price_sources=sources)
+    if not to:
+        raise ValueError(f"no email address for dealer {dealer.id}")
     body = email_body(job, d, dealer.name, approved_price)
     subject = subject_for(job, tag, d.kind)
-    return Outbound(message_id, d.dealer_id, d.kind, "email", d.round, dealer.email, subject, body,
-                    wrap_for_fo(dealer.email, cc, subject, body), d.offer, d.cited_quote_id, frozenset(allowed),
+    return Outbound(message_id, d.dealer_id, d.kind, "email", d.round, to, subject, body,
+                    wrap_for_fo(to, cc, subject, body), d.offer, d.cited_quote_id, frozenset(allowed),
                     booking_approved=d.kind == "booking" and approved_price is not None, price_sources=sources)
 
 

@@ -5,11 +5,21 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class Dealer:
+    """A dealer needs an email, a phone, or both. Phone-only dealers get the round-1 request as a call and are
+    emailed later only at the address their first written reply came from."""
     id: str
     name: str
-    email: str
+    email: str | None
     phone: str | None = None
     mode: str = "sim"
+    source: str = "manual"                  # "manual" (typed in) | "discovery" (POST /dealers/discover)
+    source_urls: tuple[str, ...] = ()       # pages the contact details were found on (discovery only)
+
+    def __post_init__(self):
+        if not self.email and not self.phone:
+            raise ValueError(f"dealer {self.id} needs an email or a phone")
+        if self.source not in ("manual", "discovery"):
+            raise ValueError(f"dealer {self.id}: unknown source {self.source!r}")
 
 
 @dataclass(frozen=True)

@@ -24,21 +24,30 @@
           "name": "Northline Motors",
           "email": "internet.sales@northline-motors.example",
           "phone": "+1-555-0101",
-          "mode": "sim"
+          "mode": "sim",
+          "source": {
+            "kind": "manual"
+          }
         },
         {
           "id": "v_harbor",
           "name": "Harbor Auto Group",
           "email": "quotes@harbor-auto.example",
           "phone": "+1-555-0102",
-          "mode": "sim"
+          "mode": "sim",
+          "source": {
+            "kind": "manual"
+          }
         },
         {
           "id": "v_summit",
           "name": "Summit Auto",
           "email": "sales@summit-auto.example",
           "phone": "+1-555-0103",
-          "mode": "sim"
+          "mode": "sim",
+          "source": {
+            "kind": "manual"
+          }
         }
       ]
     }

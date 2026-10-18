@@ -78,6 +78,7 @@ class Engine:
         self.flagged: set[str] = set()
         self.price_match_sent: dict[str, float] = {}
         self.last_written_at: dict[str, float] = {}
+        self.reply_addr: dict[str, str] = {}      # phone-only dealers: address of their first written reply
         self.sent_keys: set[tuple] = set()
         self.outbound: dict[str, Outbound] = {}
         self.rejected_quotes: set[str] = set()
@@ -94,7 +95,8 @@ class Engine:
         self.log.emit(now, "job.created", None, {
             "item": j.item, "spec": {"quantity": 1, "details": j.details}, "zip": j.zip, "deadline": j.deadline,
             "currency": j.currency, "target": j.target, "max_rounds": j.max_rounds,
-            "vendors": [{"id": d.id, "name": d.name, "email": d.email, "phone": d.phone, "mode": d.mode}
+            "vendors": [{"id": d.id, "name": d.name, "email": d.email, "phone": d.phone, "mode": d.mode,
+                         "source": {"kind": d.source, **({"urls": list(d.source_urls)} if d.source_urls else {})}}
                         for d in j.dealers]})
 
     def start(self, now: float, seed: int | None = None) -> float:
@@ -102,9 +104,19 @@ class Engine:
         self.log.emit(now, "job.started", None, {"seed": seed, "round": 1})
         t = now
         for d in self.job.dealers:
-            t = self._send(t, Decision(d.id, "rfq", "rfq", reason="Round 1 request for a written out-the-door total."),
-                           decided=False)
+            if d.email:
+                t = self._send(t, Decision(d.id, "rfq", "rfq",
+                                           reason="Round 1 request for a written out-the-door total."), decided=False)
+            else:                            # phone-only: the round-1 request is the call (so no later nudge)
+                self.nudged.add(d.id)
+                t = self._send(t, Decision(d.id, "rfq", "rfq", channel="call", reason=(
+                    "Round 1 request for a written out-the-door total. No email on file, so by phone.")),
+                    decided=False)
         return t
+
+    def email_to(self, dealer_id: str) -> str | None:
+        """The dealer's email, or for a phone-only dealer the address its first written reply came from."""
+        return self.job.dealer(dealer_id).email or self.reply_addr.get(dealer_id)
 
     def timers(self) -> list[tuple[float, str]]:
         w, s = self.waits, self.started_at
@@ -139,10 +151,13 @@ class Engine:
         self._n_reply += 1
         rid = f"r_{self._n_reply:02d}"
         dealer = self.job.dealer(inbound.dealer_id)
+        if inbound.source == "email" and inbound.from_addr and not self.email_to(dealer.id):
+            self.reply_addr[dealer.id] = inbound.from_addr
         src = {"email": "vendor_email", "call": "call", "fo_relay": "fo_relay"}[inbound.source]
         self.log.emit(now, "reply.received", dealer.id, {
             "reply_id": rid, "in_reply_to": inbound.in_reply_to, "source": src,
-            "from": inbound.from_addr or (dealer.email if inbound.source == "email" else "fo@wajo.ai"),
+            "from": inbound.from_addr or ((self.email_to(dealer.id) or "unknown") if inbound.source == "email"
+                                          else "fo@wajo.ai"),
             "subject": f"Re: {messages.subject_for(self.job, self.tag, 'rfq')}" if inbound.source == "email" else None,
             "text": inbound.text,
             "evidence": {"kind": "gmail_message" if inbound.source == "email" else "fo_conversation",
@@ -179,7 +194,7 @@ class Engine:
             "numbers_grounded": inbound.parsed.numbers_grounded,
             **({"breakdown": q.breakdown, "breakdown_flags": list(q.breakdown_flags)} if q.breakdown else {})})
         if q.price_total is not None and not q.declined:
-            verified = inbound.source == "email" and (inbound.from_addr in (None, dealer.email))
+            verified = inbound.source == "email" and inbound.from_addr in (None, self.email_to(dealer.id))
             self.log.emit(now + 0.3, "quote.verified", dealer.id, {
                 "subject_id": q.quote_id, "status": "VERIFIED" if verified else "UNVERIFIED",
                 "reason": "Dealer's own email is in your inbox." if verified else
@@ -246,11 +261,14 @@ class Engine:
             return t
         if self.state == "NEEDS_HUMAN":      # a blocking problem pauses all sending until a human looks
             return t
+        if d.channel == "email" and not self.email_to(d.dealer_id):
+            return t                         # phone-only dealer that never wrote (e.g. no decline email to send)
         if decided:
             self._decided(t, d)
             t += 0.1
         self._n_msg += 1
-        msg = messages.build(self.job, d, f"m_{self._n_msg:02d}", self.tag, self.cc, approved_price)
+        msg = messages.build(self.job, d, f"m_{self._n_msg:02d}", self.tag, self.cc, approved_price,
+                             email_to=self.email_to(d.dealer_id))
         pre = self.guard.check(msg)
         self.trust["messages_checked_before"] += 1
         self._guard_event(t, msg, pre)
