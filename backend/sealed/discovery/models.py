@@ -43,6 +43,10 @@ class Report(Record):
     dealers: list[Candidate] = Field(max_length=5)
 
 
+# Fewer verified dealers than this lets the Claude backup run (when the user allowed it).
+MIN_DEALERS = 3
+
+
 class DiscoveryError(Exception):
     """Fixed errors only; provider prose and rejected output never become API errors."""
 

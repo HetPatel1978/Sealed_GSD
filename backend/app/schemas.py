@@ -119,3 +119,4 @@ class AllowCalls(Command):
 
 class Discover(DiscoveryRequest):
     allow_fo_research: bool = False
+    allow_claude_research: bool = False     # opt-in backup if Fo's research is unusable or thin
