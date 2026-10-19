@@ -2,6 +2,8 @@
 
 Current implementation: dealer selection through written confirmation, including privacy boundaries and recovery.
 
+[Five architecture use cases and required adaptations](use_cases.md)
+
 **Diagram key:** green highlights Fo / Wajo actions; amber highlights the private zone; red highlights waiting or review paths. Arrows show permitted paths, not a promise that a seller will reply or accept the target.
 
 ## 1. Complete system overview

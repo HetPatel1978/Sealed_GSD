@@ -52,6 +52,20 @@ The detailed guide includes separate diagrams for discovery, email and calls, qu
 
 The target is not guaranteed. Negotiation stops after two rounds. Sealed makes no payments.
 
+## Five strong use cases
+
+| Use case | Example | Why this architecture fits |
+|---|---|---|
+| **1. Car buying** | Compare dealer offers for a specified car | Written out-the-door totals, a private ceiling and buyer approval |
+| **2. Office and IT equipment** | Request quotes for 50 identical monitors | Exact model, quantity, warranty and delivered-total comparison |
+| **3. Bulk printing and merchandise** | Compare quotes for 200 event T-shirts | Fixed artwork, material, sizes, setup fees and delivery deadline |
+| **4. Moving services** | Collect itemized quotes for the same household move | Shared inventory and service scope; clarify exclusions before comparing |
+| **5. Home-service replacement** | Compare like-for-like water-heater replacement quotes | Match equipment, installation scope, removal, warranty and total cost |
+
+**Implemented domain:** car buying. The other four are proposed extensions that need domain-specific forms, seller discovery, quote validation and approval terms.
+
+[Explore the five use cases and required adaptations](docs/use_cases.md)
+
 ## Try it locally
 
 **Requirements:** Python 3.11+ and Node.js 22.12+.
@@ -154,6 +168,7 @@ Details: [Fo authentication](docs/fo_adapter.md#authentication) - [Live permissi
 | Implementation and validation | [Technical PDF](docs/Sealed_Progress_Report_2026-10-18.pdf) - [Markdown](docs/progress_report_2026-10-18.md) |
 | Architecture and decisions | [Architecture](docs/architecture.md) - [Plan](docs/plan.md) - [Decisions](docs/decisions.md) - [Threat model](docs/threat_model.md) |
 | System flow diagrams | [Detailed flows](docs/system_flow.md) - [Overview SVG](docs/diagrams/system_flow.svg) - [Mermaid source](docs/diagrams/system_flow.mmd) |
+| Architecture use cases | [Five applications and adaptation requirements](docs/use_cases.md) |
 | Dashboard and worker | [Dashboard](docs/dashboard.md) - [API](docs/api.md) - [Coordinator](docs/coordinator.md) |
 | Fo + Wajo integration | [Adapter](docs/fo_adapter.md) - [Email briefs](docs/fo_briefs.md) - [Calls](docs/calls.md) - [MCP notes](docs/research/fo_mcp.md) |
 | Research and written evidence | [Discovery](docs/dealer_discovery.md) - [Gmail](docs/gmail_ingestion.md) - [Sent audit](docs/sent_audit.md) - [Parser](docs/quote_parser.md) - [Delivery](docs/reply_delivery.md) |
