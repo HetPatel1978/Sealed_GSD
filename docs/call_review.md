@@ -1,5 +1,10 @@
 # Release a reviewed, uncertain Fo call
 
+Most unclear calls can now be settled from the dashboard without stopping the backend: the paused
+step asks you to confirm you checked Fo, then offers "The call happened", "Try again" or "Skip it"
+(`POST /jobs/{id}/resolve`, see [api.md](api.md)). Use the CLI below when the dashboard does not offer
+those options, for example after a later pause on the same job.
+
 New checked-plan calls have [durable result tracking](calls.md). This procedure is
 for a call that still needs explicit operator review, including a missing final
 report or a flagged identity/follow-up result.

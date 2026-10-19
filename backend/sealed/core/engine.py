@@ -61,6 +61,15 @@ NOT_SENT = {
 }
 
 
+# Unclear Fo outcomes the buyer may resolve from the dashboard after checking Fo and Gmail.
+RESOLVABLE = frozenset({"send_unclear", "call_review", "call_result_missing"})
+RESOLUTIONS = {
+    "sent": "You confirmed it went out. Recorded as sent; nothing was resent.",
+    "retry": "You confirmed it did not go out. Sending it once more.",
+    "skip": "You confirmed it did not go out. Continuing without it.",
+}
+
+
 class StaleProposal(Exception):
     pass
 
@@ -78,6 +87,7 @@ class Engine:
         self.log = log or EventLog(job.id, job.run_id, job.mode)
         self.ledger = Ledger(job.deadline, {d.id: d.email for d in job.dealers}, job.currency)
         self.state = "CREATED"
+        self.resume_state: str | None = None     # state to restore when the buyer resolves an unclear send
         self.round = 1
         self.started_at = 0.0
         self.contacted: set[str] = set()
@@ -334,19 +344,23 @@ class Engine:
             msg = replace(msg, subject=subject, reply_to_message_id=evidence.message_id,
                 reply_thread_id=evidence.thread_id, fo_instruction=messages.wrap_email_brief_for_fo(
                     msg.to, msg.cc, subject, msg.body, evidence.message_id))
+        return self._submit(t, msg, key)
+
+    def _submit(self, t: float, msg: Outbound, key: tuple | None) -> float:
         pre = self.guard.check(msg)
         self.trust["messages_checked_before"] += 1
         self._guard_event(t, msg, pre)
         if not pre.passed:
-            blocking = d.kind == "booking"
-            self.log.emit(t + 0.1, "job.needs_human", d.dealer_id, {
+            blocking = msg.kind == "booking"
+            self.log.emit(t + 0.1, "job.needs_human", msg.dealer_id, {
                 "reason_code": "guard_blocked", "blocking": blocking,
-                "message": f"A {d.kind} {d.channel} to {self.job.dealer(d.dealer_id).name} was blocked by the "
+                "message": f"A {msg.kind} {msg.channel} to {self.job.dealer(msg.dealer_id).name} was blocked by the "
                            "pre-send guard and not sent."})
             if blocking:
                 self.state = "NEEDS_HUMAN"
             return t + 0.2
-        self.sent_keys.add(key)
+        if key is not None:
+            self.sent_keys.add(key)
         self.outbound[msg.message_id] = msg
 
         def approve_preview(preview: str) -> bool:
@@ -400,19 +414,30 @@ class Engine:
             code = result.reason_code or "audit_mismatch"
             self.log.emit(result.sent_at, "job.needs_human", msg.dealer_id, {
                 "reason_code": code, "blocking": True, "message": NOT_SENT.get(code, NOT_SENT["send_unclear"]),
-                **({"fo_said": safe_note} if safe_note else {})})
-            self.state = "NEEDS_HUMAN"
+                "message_id": msg.message_id, **({"fo_said": safe_note} if safe_note else {})})
+            self._hold()
             return result.sent_at
         if result.reason_code is not None:
             self.log.emit(result.sent_at, "job.needs_human", msg.dealer_id, {
                 "reason_code": result.reason_code, "blocking": True,
                 "message": "Fo reported sending, but the turn needs review. Not resent; check Gmail or the call transcript.",
-                **({"fo_said": safe_note} if safe_note else {})})
-            self.state = "NEEDS_HUMAN"
-        st = result.sent_at
+                "message_id": msg.message_id, **({"fo_said": safe_note} if safe_note else {})})
+            self._hold()
+        return self._record_sent(result.sent_at, msg, result)
+
+    def _hold(self) -> None:
+        if self.state != "NEEDS_HUMAN":
+            self.resume_state = self.state
+        self.state = "NEEDS_HUMAN"
+
+    def _record_sent(self, st: float, msg: Outbound, result: SendResult | None) -> float:
+        """`result` is None when the buyer confirmed the send; there is no Fo draft or audit then."""
         event_body = msg.body
         content = {}
-        if msg.email_brief is not None:
+        if result is None:
+            event_body = "" if msg.email_brief is not None else msg.body
+            content = {"content_source": "buyer_confirmed", **({"brief": msg.body} if msg.email_brief is not None else {})}
+        elif msg.email_brief is not None:
             reviewed = result.draft is not None and self.guard.check_email(msg, result.draft).passed
             event_body = result.draft.body if reviewed else ""
             content = {"brief": msg.body, "content_source": "fo_preview" if reviewed else "pending_gmail"}
@@ -421,17 +446,51 @@ class Engine:
             "to": msg.to if msg.channel == "email" else f"{self.job.dealer(msg.dealer_id).name} sales line",
             "subject": msg.subject, "body": event_body, "offer": msg.offer, "cited_quote_id": msg.cited_quote_id,
             "numbers": messages.number_provenance(replace(msg, body=event_body), self.job), **content})
-        reached = result.call_report is None or result.call_report.get("outcome") == "connected"
+        reached = result is None or result.call_report is None or result.call_report.get("outcome") == "connected"
         if msg.dealer_id not in self.contacted and msg.kind == "rfq" and reached:
             self.contacted.add(msg.dealer_id)
             self.log.emit(st, "vendor.contacted", msg.dealer_id, {"message_id": msg.message_id, "round": msg.round})
         if msg.kind == "booking":
             self.booking_message = msg.message_id
+        if result is None:
+            return st + 1
         if result.audit is not None:
             self.on_email_audit(st + 1, result.audit)
         elif msg.channel == "email" and result.sent_copy is not None:
             self._audit(st + 1, msg, result.sent_copy)
         return st + 1
+
+    def resolve_review(self, now: float, message_id: str, outcome: str, event_id: int) -> float:
+        """Apply the buyer's checked answer to one unclear Fo send or call, then resume.
+
+        The caller verifies that this message caused the latest blocking pause. "sent" records it
+        without resending, "retry" queues the same payload once under a new message ID, and "skip"
+        continues without it. A booking cannot be skipped.
+        """
+        msg = self.outbound.get(message_id)
+        if self.state != "NEEDS_HUMAN" or msg is None or outcome not in RESOLUTIONS:
+            raise ValueError("No paused message to resolve.")
+        if outcome == "skip" and msg.kind == "booking":
+            raise ValueError("A booking request cannot be skipped.")
+        self.state = self.resume_state or ("BOOKING" if msg.kind == "booking" else
+                                           "AWAITING_APPROVAL" if self.proposal else "RUNNING")
+        self.resume_state = None
+        self.log.emit(now, "job.resumed", msg.dealer_id, {"message_id": message_id, "outcome": outcome,
+            "resolves_event_id": event_id, "message": RESOLUTIONS[outcome]})
+        t = now + 0.1
+        if outcome == "sent":
+            if not any(e["data"].get("message_id") == message_id for e in self.log.of_type("message.sent")):
+                t = self._record_sent(t, msg, None)
+            if msg.kind == "booking" and self.state == "BOOKING":
+                t = self._decline_others(t)
+        elif outcome == "retry":
+            self._n_msg += 1
+            again = replace(msg, message_id=f"m_{self._n_msg:02d}")
+            if again.call_buyer is not None:
+                # The checked call plan is bound to its message ID through the request ID.
+                again = replace(again, fo_instruction=messages.call_plan_request(again))
+            t = self._submit(t, again, None)
+        return t
 
     def on_email_audit(self, t: float, result: EmailAudit) -> None:
         """Apply trusted Gmail audit evidence once, scoped to a successfully sent payload."""

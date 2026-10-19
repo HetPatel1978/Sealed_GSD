@@ -37,6 +37,7 @@ export default function App() {
   const [liveConsent, setLiveConsent] = useState(false)
   const [callConsent, setCallConsent] = useState(false)
   const [restoreValue, setRestoreValue] = useState('')
+  const [reviewChecked, setReviewChecked] = useState(false)
   // Layout: which detail tab is open, which dealer card a link asked to open, and what the user has already seen.
   const [tab, setTab] = useState<TabId>('overview')
   const [focus, setFocus] = useState<{ id: string; n: number } | null>(null)
@@ -204,11 +205,30 @@ export default function App() {
           <p className="muted">Sealed won’t show you the same offer again. It proposes again only if a seller sends a new firm written quote.{j.mode === 'sim' ? ' In this simulation no further quotes will arrive, so cancel and start a new negotiation to try approving.' : ''}</p>
           <div className="actions"><button className="secondary" onClick={() => openTab('dealers')}>Review dealer history →</button></div>
         </Step>
-      case 'NEEDS_HUMAN':
+      case 'NEEDS_HUMAN': {
+        // Only an unclear Fo send/call can be settled here; other pauses stay review-only.
+        const review = j.review
+        const call = review?.channel === 'call'
+        const resolve = (outcome: 'sent' | 'retry' | 'skip') => review && void act(async () => {
+          await request(`/jobs/${j.id}/resolve`, { message_id: review.message_id, outcome, checked: true })
+          setReviewChecked(false)
+        })
         return <Step eyebrow="PAUSED · NEEDS YOUR DECISION" title={blocking ? `${blocking.vendor_id ? dealerName(blocking.vendor_id) + ': ' : ''}${label(blocking.reason_code)}` : 'Sealed paused this negotiation'} tone="alert">
           <p>{blocking?.message ?? 'Review the latest events before proceeding.'}</p>
+          {review && <>
+            <p className="muted">{call
+              ? `Open the Fo conversation for ${dealerName(review.vendor_id)} and check whether the call was actually placed.`
+              : `Check Gmail (you are CC’d) and the Fo conversation for the email to ${dealerName(review.vendor_id)}.`} Then tell Sealed what happened.</p>
+            <label className="check"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} />I checked Fo{call ? '' : ' and Gmail'}, and Fo is not still working on this {call ? 'call' : 'email'} or scheduling a follow-up.</label>
+            <div className="actions">
+              <button disabled={busy || !reviewChecked} onClick={() => resolve('sent')}>{call ? 'The call happened, continue' : 'It was sent, continue'}</button>
+              <button className="secondary" disabled={busy || !reviewChecked} onClick={() => resolve('retry')}>{call ? 'Not called, try again' : 'Not sent, send again'}</button>
+              {review.can_skip && <button className="secondary" disabled={busy || !reviewChecked} onClick={() => resolve('skip')}>{call ? 'Not called, skip it' : 'Not sent, skip it'}</button>}
+            </div>
+          </>}
           <div className="actions"><button className="secondary" onClick={() => openTab('overview')}>See details →</button></div>
         </Step>
+      }
       case 'COMPLETED':
         return <Step eyebrow={j.mode === 'sim' ? 'DONE · SIMULATION COMPLETE' : 'DONE · WRITTEN CONFIRMATION RECEIVED'} title={`${money(j.best_quote, j.currency)} with ${dealerName(j.proposal?.vendor_id ?? receipt?.vendor_name)}`} tone="done" status>
           {receipt && <p>Saved {money(receipt.savings_abs, receipt.currency)} from the first firm quote. Delivery {receipt.delivery_date}.</p>}

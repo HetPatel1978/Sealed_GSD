@@ -28,6 +28,7 @@ class Checkpoint(BaseModel):
     tag: str
     waits: Waits
     state: str
+    resume_state: str | None = None
     round: int
     started_at: float
     sets: dict[str, set[str]]
@@ -49,7 +50,7 @@ class Checkpoint(BaseModel):
 
 def dump(engine: Engine) -> str:
     value = Checkpoint(version=1, job=engine.job, cc=engine.cc, tag=engine.tag, waits=engine.waits,
-        state=engine.state, round=engine.round, started_at=engine.started_at,
+        state=engine.state, resume_state=engine.resume_state, round=engine.round, started_at=engine.started_at,
         sets={key: getattr(engine, key) for key in SETS}, maps={key: getattr(engine, key) for key in MAPS},
         sent_keys=engine.sent_keys, outbound=engine.outbound, reply_context=engine.reply_context,
         proposal=engine.proposal, winner=engine.winner, booking_message=engine.booking_message,
@@ -71,6 +72,7 @@ def load(encoded: str, *, transport, checker, qualifier) -> Engine:
     log._last_ts = value.events[-1]["ts"] if value.events else ""
     engine = Engine(value.job, transport, checker, qualifier, cc=value.cc, tag=value.tag, waits=value.waits, log=log)
     engine.state, engine.round, engine.started_at = value.state, value.round, value.started_at
+    engine.resume_state = value.resume_state
     for key, item in {**value.sets, **value.maps}.items():
         setattr(engine, key, item)
     engine.sent_keys, engine.outbound = value.sent_keys, value.outbound

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Event
 
-from sealed.core.engine import Engine, StaleProposal, Waits
+from sealed.core.engine import RESOLVABLE, Engine, StaleProposal, Waits
 from sealed.core.events import EventLog
 from sealed.ingest.deliver import DeliveryError, MAIL, QueueTransport, ReplyDelivery, parsing_context
 from sealed.ingest.gmail import GmailError, poll
@@ -98,6 +98,45 @@ class Coordinator:
         eng.state, eng.proposal = "CANCELLED", None
         eng.log.emit(self._minutes(eng), "job.cancelled", None, {"reason": "User cancelled the job."})
         self.store._save(self.account, eng)
+
+    def reviewable(self, scope, engine=None):
+        """The one unclear Fo send or call behind this run's latest pause, or None.
+
+        Only a pause that a buyer can settle by checking Fo and Gmail qualifies; guard,
+        identity, parser and budget pauses keep their own review paths.
+        """
+        eng = engine or self._load(scope, self._runtime(scope))
+        if eng.state != "NEEDS_HUMAN" or self._cancelled(scope) or self.store.in_flight(self.account, *scope):
+            return None
+        rows = self.store.db.execute("SELECT message_id,result FROM engine_outbox WHERE account=? AND job_id=? AND run_id=? AND status='review'",
+                                     (self.account, *scope)).fetchall()
+        if len(rows) != 1:
+            return None
+        message_id, result = rows[0][0], json.loads(rows[0][1] or "null") or {}
+        msg, code = eng.outbound.get(message_id), result.get("reason_code")
+        blocking = [e for e in eng.log.of_type("job.needs_human") if e["data"].get("blocking")]
+        if msg is None or code not in RESOLVABLE or not blocking:
+            return None
+        last = blocking[-1]
+        if (last["vendor_id"] != msg.dealer_id or last["data"].get("reason_code") != code
+                or last["data"].get("message_id", message_id) != message_id
+                or any(e["id"] > last["id"] for e in eng.log.of_type("job.resumed"))):
+            return None
+        return {"message_id": message_id, "vendor_id": msg.dealer_id, "channel": msg.channel, "kind": msg.kind,
+                "reason_code": code, "event_id": last["id"], "can_skip": msg.kind != "booking"}
+
+    def resolve(self, job_id, run_id, message_id, outcome):
+        scope = (job_id, run_id)
+        runtime = self._runtime(scope)
+        with self.store.transaction():
+            eng = self._load(scope, runtime)
+            review = self.reviewable(scope, eng)
+            if not review or review["message_id"] != message_id or (outcome == "skip" and not review["can_skip"]):
+                raise DeliveryError("review_not_available")
+            eng.resolve_review(self._minutes(eng), message_id, outcome, review["event_id"])
+            self.store.db.execute("UPDATE engine_outbox SET status=? WHERE account=? AND job_id=? AND run_id=? AND message_id=?",
+                                  (f"resolved_{outcome}", self.account, *scope, message_id))
+            self.store._save(self.account, eng)
 
     def _minutes(self, engine):
         return (self.clock() - engine.log.t0).total_seconds() / 60

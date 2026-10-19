@@ -165,6 +165,7 @@ class JobService:
             "started_at": started[0]["ts"] if started else None, "vendors": vendors, "proposal": eng.proposal,
             "first_quote": eng.first_quote(), "best_quote": eng.proposal["price_total"] if eng.proposal else None,
             "trust": eng.trust, "last_event_id": len(eng.log.events), "worker_status": self.row(job_id)[4],
+            "review": self.local_coordinator(job_id).reviewable((job_id, eng.job.run_id), eng),
             "start_requested": bool(self.row(job_id)[2])}
 
     def events(self, job_id, after=0):
@@ -267,6 +268,31 @@ class JobService:
     def cancel(self, job_id):
         eng = self.engine(job_id)
         self.local_coordinator(job_id).cancel(job_id, eng.job.run_id)
+        return self.view(job_id)
+
+    def resolve(self, job_id, command):
+        """Settle one unclear Fo send/call from the dashboard once the buyer has checked Fo and Gmail."""
+        row = self.row(job_id)
+        message_id, outcome = command["message_id"], command["outcome"]
+        co = self.local_coordinator(job_id)
+        review = co.reviewable((job_id, row[0]))
+        if not review or review["message_id"] != message_id or (outcome == "skip" and not review["can_skip"]):
+            raise APIError("review_not_available")
+        if self.mode == "live":
+            with _TURN_LOCK:
+                fo = FoStore(self.fo_state)
+                key = FoStore.key(job_id, row[0], message_id)
+                active = fo.data.get("active")
+                if active not in (None, key):
+                    raise APIError("fo_account_requires_review")
+                # Keep the original status, reply and fingerprint; the retry gets its own message ID.
+                record = fo.data["messages"].setdefault(key, {})
+                record.setdefault("resolutions", []).append({"kind": "buyer_checked_in_dashboard", "outcome": outcome,
+                    "reviewed_at": datetime.now(timezone.utc).isoformat()})
+                fo.data["active"] = None
+                fo.save()
+        co.resolve(job_id, row[0], message_id, outcome)
+        self.store.db.execute("UPDATE api_jobs SET worker_status='scheduled' WHERE job_id=?", (job_id,))
         return self.view(job_id)
 
     def allow_calls(self, job_id):

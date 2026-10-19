@@ -12,11 +12,14 @@ from sealed.fo.adapter import Store, _TURN_LOCK
 from sealed.fo.client import FoTimeout
 
 CALL_RESULT_TIMEOUT_S = 1800
+PLAN_POLL_LIMIT_S = 600
 
 
 class CallTransport:
-    def __init__(self, client, path, *, clock=time.time):
+    def __init__(self, client, path, *, clock=time.time, sleep=time.sleep,
+                 plan_limit_s=PLAN_POLL_LIMIT_S, wait_seconds=40):
         self.client, self.store, self.clock = client, Store(path), clock
+        self.sleep, self.plan_limit_s, self.wait_seconds = sleep, plan_limit_s, wait_seconds
 
     @staticmethod
     def _failure(now, code="send_unclear"):
@@ -35,6 +38,25 @@ class CallTransport:
                 cid = candidate
                 self.store.set_conversation(msg, cid)
         return cid
+
+    def _plan(self, msg, cid):
+        """Ask for the plan once. While Fo is still working, poll get_fo_reply; never re-ask."""
+        try:
+            result = self.client.ask(msg.fo_instruction, cid)
+        except FoTimeout:
+            result = {"status": "working", "conversationId": cid}
+        deadline = self.clock() + self.plan_limit_s
+        while True:
+            cid = self._cid(msg, result, cid)
+            # Without a conversation ID there is nothing safe to poll; the caller fails closed.
+            if result.get("status") != "working" or not cid or self.clock() >= deadline:
+                return result, cid
+            try:
+                result = self.client.reply(cid, self.wait_seconds)
+            except FoTimeout:
+                continue
+            if result.get("status") == "working":
+                self.sleep(min(1.0, max(0.0, deadline - self.clock())))
 
     def send(self, now, msg, approve_preview):
         if not msg.job_id or not msg.run_id or not payload_intact(msg):
@@ -60,8 +82,7 @@ class CallTransport:
                 self.store.set_status(key, "pending", active=True, phase="plan_pending", fingerprint=fingerprint,
                     dealer_id=msg.dealer_id, channel="call", contract="sealed-call-v1",
                     attempted_at=datetime.now(timezone.utc).isoformat())
-                result = self.client.ask(msg.fo_instruction, cid)
-                cid = self._cid(msg, result, cid)
+                result, cid = self._plan(msg, cid)
                 if not cid or result.get("status") != "complete":
                     raise ValueError("call_plan_unverified")
                 text = result.get("response", "")
