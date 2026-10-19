@@ -9,11 +9,17 @@ export type Vendor = {
   id: string; name: string; email: string | null; phone?: string | null; mode: string; state: string; flags: string[]
   latest_quote: { price_total: number | null; currency: string; firm: boolean; delivery_date: string | null; verification: string } | null
 }
+// The one unclear Fo send or call the buyer can settle from the dashboard after checking Fo and Gmail.
+export type PendingReview = {
+  message_id: string; vendor_id: string; channel: 'email' | 'call'; kind: string; reason_code: string
+  event_id: number; can_skip: boolean
+}
 export type Job = {
   id: string; run_id: string; item: string; spec: { quantity: number; details: string }; deadline: string
   currency: string; target: number; ceiling_set: boolean; round: number; mode: 'sim' | 'live'; state: string
   vendors: Vendor[]; proposal: Proposal | null; first_quote: number | null; best_quote: number | null
   trust: Record<string, number>; last_event_id: number; worker_status?: string; start_requested?: boolean
+  review?: PendingReview | null
 }
 export type SealedEvent = { id: number; job_id: string; ts: string; type: string; vendor_id: string | null; mode: string; data: Record<string, unknown> }
 export type Receipt = {
@@ -33,6 +39,8 @@ const messages: Record<string, string> = {
   discovery_selection_changed: 'The saved dealer selection changed or expired. Search again or add the seller manually.',
   job_already_started: 'This job has already started. Its current state has been refreshed.',
   job_not_found: 'This job could not be found.',
+  review_not_available: 'This pause changed or was already resolved. Its current state has been refreshed.',
+  fo_account_requires_review: 'Fo is paused on a different job’s message. Resolve that one first.',
 }
 
 export async function request<T>(path: string, body?: unknown): Promise<T> {
@@ -52,6 +60,6 @@ export const eventTypes = [
   'job.created', 'job.started', 'vendor.contacted', 'guard.checked', 'message.queued', 'message.suppressed',
   'message.sent', 'audit.checked', 'reply.received', 'quote.parsed', 'quote.verified', 'strategy.decided',
   'call.pending', 'call.completed',
-  'proposal.created', 'approval.requested', 'job.approved', 'job.rejected', 'job.needs_human', 'job.completed',
+  'proposal.created', 'approval.requested', 'job.approved', 'job.rejected', 'job.needs_human', 'job.resumed', 'job.completed',
   'job.cancelled', 'error',
 ]

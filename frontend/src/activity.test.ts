@@ -71,3 +71,18 @@ group('call lifecycle activity', () => {
     expect(describe(updates[2], names)).toContain('no answer')
   })
 })
+
+group('dashboard resolution', () => {
+  it('marks the paused alert resolved once the buyer continues', () => {
+    const base = { job_id: 'j', mode: 'live', ts: '2026-10-19T17:33:00Z' }
+    const paused = buildActivity([
+      { ...base, id: 1, type: 'job.needs_human', vendor_id: 'v_01', data: { reason_code: 'send_unclear', blocking: true, message: 'unclear' } },
+    ])
+    expect(paused.alerts[0].blocking).toBe(true)
+    const resumed = buildActivity([
+      { ...base, id: 1, type: 'job.needs_human', vendor_id: 'v_01', data: { reason_code: 'send_unclear', blocking: true, message: 'unclear' } },
+      { ...base, id: 2, type: 'job.resumed', vendor_id: 'v_01', data: { outcome: 'retry', resolves_event_id: 1, message: 'Sending it once more.' } },
+    ])
+    expect(resumed.alerts[0]).toMatchObject({ blocking: false, resolution: 'Sending it once more.' })
+  })
+})

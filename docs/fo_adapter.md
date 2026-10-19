@@ -93,8 +93,10 @@ in this smoke command.
   explicitly says no payment is being made by email.
 - Unresolved or flagged activity keeps an active marker across restarts. Further sends stop for human
   review. Inspect Fo and Gmail, retain the message records, and reconcile the state only after the
-  outcome is known. A limited [operator-reviewed call release](call_review.md) is available; automatic
-  review/release is not implemented. Do not delete the state file or change
+  outcome is known. For an unclear send or call, the dashboard's paused step offers "it went out",
+  "try again" and "skip it" once the buyer confirms they checked (`POST /jobs/{id}/resolve`). The
+  [operator-reviewed call release](call_review.md) CLI remains; automatic review/release is not
+  implemented. Do not delete the state file or change
   run IDs to force a resend.
 - Nonempty unscoped legacy files are rejected unchanged. They need explicit review rather than a
   guessed migration that might duplicate an earlier send.

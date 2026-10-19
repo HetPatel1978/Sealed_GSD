@@ -49,6 +49,7 @@ Why the endpoint is separate: the event log stays ceiling-free, so `mock/check_m
 | GET | `/jobs/{id}/events` | SSE event stream, supports `Last-Event-ID` |
 | POST | `/jobs/{id}/approve` | Approve the current proposal (echoes exact terms) |
 | POST | `/jobs/{id}/reject` | Reject the current proposal |
+| POST | `/jobs/{id}/resolve` | Settle an unclear Fo send or call after checking Fo and Gmail |
 | POST | `/jobs/{id}/cancel` | Cancel the job |
 | GET | `/jobs/{id}/receipt` | Final receipt with evidence |
 | POST | `/sim/advance` | Step simulated sellers forward (sim mode only) |
@@ -200,6 +201,18 @@ A sender-matched written update from the proposed dealer supersedes its old term
 
 ### POST /jobs/{id}/reject
 `{ "proposal_id": "p_01", "reason": "optional free text" }` → `200` `JobView`. `409` if stale.
+
+### POST /jobs/{id}/resolve
+`{ "message_id": "m_01", "outcome": "sent" | "retry" | "skip", "checked": true }` → `200` `JobView`.
+
+Available only while `JobView.review` is set: the job is `NEEDS_HUMAN` and its latest blocking pause is
+one Fo send or call with `send_unclear`, `call_review` or `call_result_missing`. `checked: true` is the
+buyer's statement that they checked Fo (and Gmail, for email) and Fo is not still working on it.
+`sent` records the message as sent without resending; `retry` queues the same payload once under a new
+message ID; `skip` continues without it (not allowed for a booking). The job returns to the state it was
+paused from and a `job.resumed` event names the pause it resolved. The Fo account reservation for that
+message is released; its original record is kept with an appended resolution. `409 review_not_available`
+if the pause changed; `409 fo_account_requires_review` if Fo is reserved by a different message.
 
 ### POST /jobs/{id}/cancel
 `{ "reason": "optional" }` → `200` `JobView` (state `CANCELLED`). Stops queued outreach. The current implementation does not send cancellation notes or recall an in-flight send. Free-text reasons are not copied into events or outreach.

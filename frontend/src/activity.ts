@@ -43,6 +43,7 @@ export type DealerActivity = {
 export type ReviewAlert = {
   event_id: number; ts: string; vendor_id: string | null; reason_code: string; blocking: boolean; message: string
   flags: { flag: string; speaker?: string; excerpt?: string }[]
+  resolution?: string   // set when the buyer settled this pause from the dashboard
 }
 
 export type FeeRow = {
@@ -179,6 +180,11 @@ export function buildActivity(events: SealedEvent[]): Activity {
         if (vid && d.reason_code === 'suspicious_instruction') dealer(vid).flagged = true
         break
       }
+      case 'job.resumed': {
+        const settled = alerts.find(a => a.event_id === d.resolves_event_id)
+        if (settled) { settled.blocking = false; settled.resolution = String(d.message ?? '') }
+        break
+      }
       case 'job.completed': {
         fee_comparison = (d.fee_comparison as FeeRow[]) ?? null
         trust = (d.trust as Record<string, number>) ?? null
@@ -215,6 +221,7 @@ export function describe(e: SealedEvent, names: Map<string, string>): string {
     case 'job.approved': return `You approved ${money(d.price_total)}`
     case 'job.rejected': return 'You rejected the proposal'
     case 'job.needs_human': return `Needs your review: ${String(d.message ?? d.reason_code)}`
+    case 'job.resumed': return `Resumed: ${String(d.message ?? d.outcome)}`
     case 'job.completed': return `Completed with ${who}: ${money(d.best_quote)}`
     case 'job.cancelled': return 'Negotiation cancelled'
     case 'error': return `${who}: ${String(d.message ?? d.code)}`

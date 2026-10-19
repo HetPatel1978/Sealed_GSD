@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.jobs import APIError, JobService
-from app.schemas import Advance, AllowCalls, Approve, Cancel, CreateJob, Discover, Reject, Restore, Start
+from app.schemas import Advance, AllowCalls, Approve, Cancel, CreateJob, Discover, Reject, Resolve, Restore, Start
 from app.security import ALLOWED_HOST_HEADERS, DashboardRequests, LoopbackOnly, dashboard_origin
 from sealed.core.engine import StaleProposal
 from sealed.env import REPO_ROOT, load_env
@@ -187,6 +187,10 @@ def create_app(*, data_dir: Path | None = None, mode=None, background=True, inte
     @api.post("/jobs/{job_id}/cancel")
     async def cancel(job_id: str, command: Cancel = Cancel()):
         return await call("cancel", job_id)
+
+    @api.post("/jobs/{job_id}/resolve")
+    async def resolve(job_id: str, command: Resolve):
+        return await call("resolve", job_id, command.model_dump())
 
     @api.post("/jobs/{job_id}/allow-calls")
     async def allow_calls(job_id: str, command: AllowCalls):
