@@ -62,12 +62,15 @@ Why the endpoint is separate: the event log stays ceiling-free, so `mock/check_m
 
 ### POST /dealers/discover and GET /dealers/discover/{id}
 Fo-first discovery is asynchronous. POST accepts only public item/specification,
-US ZIP, `radius_miles: 20` and `allow_fo_research` (required true live). It returns
+US ZIP, `radius_miles: 20`, `allow_fo_research` (required true live) and optional
+`allow_claude_research` (opt-in Claude backup when Fo's research is unusable or
+finds fewer than three dealers). It returns
 `202` with a saved search ID, progress, status and cached flag. Poll GET until
 `complete`, `failed` or `needs_review`; neither endpoint waits for a long Fo turn.
 Completed results contain up to five checked candidates, nullable published
 contacts, official source URLs, approximate ZIP-centroid distances and unconfirmed
-inventory status. ZIP coordinates use the public Zippopotam.us service; there is
+inventory status, each with `found_by: "fo" | "claude"`, plus a `search` summary of
+whether the backup ran and why. ZIP coordinates use the public Zippopotam.us service; there is
 no offline ZIP table. Simulation returns explicitly synthetic results without
 external calls. Research receives no target, ceiling or buyer identity.
 

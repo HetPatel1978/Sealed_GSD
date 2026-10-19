@@ -25,6 +25,7 @@ from sealed.ingest.deliver import DeliveryError
 from sealed.parser.quote import ParserError
 from sealed.private import vault
 from sealed.private.runtime import for_run
+from sealed.discovery.claude import factory_from_env as claude_factory_from_env
 from sealed.discovery.models import DiscoveryError, Request as DiscoveryRequest
 from sealed.discovery.worker import Discovery
 
@@ -62,7 +63,8 @@ def create_app(*, data_dir: Path | None = None, mode=None, background=True, inte
             service = await invoke(lambda: JobService(root, mode=mode, runtime=for_run,
                                                       fo_state=fo_state or REPO_ROOT / ".sealed/fo_state.json"))
             api.state.service = service
-            discovery = Discovery(root, account=service.account, mode=mode, fo_state=service.fo_state)
+            discovery = Discovery(root, account=service.account, mode=mode, fo_state=service.fo_state,
+                                  claude_factory=claude_factory_from_env(mode))
             api.state.discovery = discovery
             service.discovery = discovery
             task = asyncio.create_task(work()) if background else None
@@ -232,8 +234,8 @@ def create_app(*, data_dir: Path | None = None, mode=None, background=True, inte
     async def discover(command: Discover):
         if mode == "live" and not command.allow_fo_research:
             raise APIError("discovery_permission_required")
-        public = DiscoveryRequest.model_validate(command.model_dump(exclude={"allow_fo_research"}))
-        return await asyncio.to_thread(api.state.discovery.submit, public)
+        public = DiscoveryRequest.model_validate(command.model_dump(exclude={"allow_fo_research", "allow_claude_research"}))
+        return await asyncio.to_thread(api.state.discovery.submit, public, command.allow_claude_research)
 
     @api.get("/dealers/discover/{search_id}")
     async def discovery_status(search_id: str):

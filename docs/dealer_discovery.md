@@ -1,7 +1,8 @@
 # Fo dealer discovery
 
 The dashboard's **Find dealers** button now researches public dealer websites
-through the existing Fo MCP connection. No additional AI/search API key is needed.
+through the existing Fo MCP connection. An optional Claude backup (below) needs
+`ANTHROPIC_API_KEY`; Fo-only discovery needs no other key.
 Enter the item, exact specification and a US ZIP, find candidates, select up to
 five sellers total, then create the negotiation. Manual sellers remain supported.
 
@@ -20,7 +21,8 @@ the existing permissions and approval rules. Stock always needs confirmation.
   "spec": {"quantity": 1, "details": "2026 Honda Civic Sport sedan Crystal Black Pearl automatic"},
   "zip": "19104",
   "radius_miles": 20,
-  "allow_fo_research": true
+  "allow_fo_research": true,
+  "allow_claude_research": true
 }
 ```
 
@@ -106,3 +108,32 @@ Shutdown waits for the worker before releasing the account process lock.
 Validation covers mocked Fo polling/restarts, source and distance checks, transport
 restrictions, API selection binding and full simulation through explicit approval
 and written confirmation. A fresh live Fo discovery acceptance remains separate.
+
+## Claude backup (opt-in)
+
+If the user ticks the second permission box (`allow_claude_research`, live only,
+requires `allow_fo_research`), Claude researches the same public request when
+Fo's research ends `failed` or `needs_review`, or leaves fewer than three checked
+dealers. Claude gets only the public `Request` (no target, ceiling or identity),
+uses the `web_search` and `web_fetch` server tools and nothing that acts, and must
+return Fo's exact `Report` schema. Its report goes through the same
+`validate_candidates` checks. Fo's dealers win on a duplicate website; Claude's
+new ones are added and each dealer carries `found_by: "fo" | "claude"`.
+
+- The backup never takes the Fo turn lock and never changes the Fo account
+  state, so an uncertain Fo reservation stays exactly as it was. A Fo
+  `needs_review` is still reported (`search.fo_status`) even when Claude's dealers
+  complete the search.
+- The decision to run the backup is written together with Fo's outcome, so a
+  poller never sees a final status that is about to change.
+- A Claude search contacts no one, so after a restart the backup phase simply
+  runs again. If Claude fails, the search returns to Fo's own outcome and
+  `search.fallback_error` holds a fixed code (`claude_rate_limited`, ...).
+- Giving the permission later on a finished, thin search runs only the backup;
+  Fo is never asked again.
+- Responses add `search`: `primary`, `fallback_allowed`, `fallback_used`,
+  `fallback_reason` (Fo's error code or `too_few`), `fallback_error`, `fo_status`.
+
+Config: `ANTHROPIC_DISCOVERY_MODEL` (default `claude-opus-5-5`; must support the
+`web_search_20260209` / `web_fetch_20260209` tools) and
+`SEALED_DISCOVERY_FALLBACK=off` to disable it. Simulation never calls Claude.
