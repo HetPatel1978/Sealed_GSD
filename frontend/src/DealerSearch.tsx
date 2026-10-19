@@ -15,6 +15,12 @@ type Search = {
 }
 export type Requirements = { item: string; spec: { quantity: 1; details: string }; zip: string }
 
+const reviewMessages: Record<string, string> = {
+  fo_account_requires_review: 'Fo is paused because an earlier call or message has an unconfirmed outcome. Review that paused negotiation before starting another dealer search. This search has not been sent to Fo.',
+  invalid_report: 'Fo finished, but its response could not be read as a valid dealer report. The search was saved for review and has not been repeated.',
+  research_requires_review: 'The research outcome is uncertain. Its saved conversation needs review before another request is sent.',
+}
+
 export default function DealerSearch({ requirements, mode, selected, count, onSelect }: {
   requirements: Requirements; mode: 'sim' | 'live'; selected: string[]; count: number
   onSelect: (dealer: FoundDealer, checked: boolean) => void
@@ -51,11 +57,12 @@ export default function DealerSearch({ requirements, mode, selected, count, onSe
   }
 
   const valid = requirements.item.trim() && requirements.spec.details.trim() && /^\d{5}$/.test(requirements.zip)
+  const progress = search?.status === 'needs_review' ? reviewMessages[search.error ?? ''] ?? search.progress : search?.progress
   return <section className="dealer-search" aria-label="Find dealers">
     <div className="section-title"><div><h3>Need help finding sellers?</h3><p className="small">Search within about 20 miles using ZIP-centroid distances.</p></div><button type="button" className="secondary" disabled={!valid || starting || pending || (mode === 'live' && !consent)} onClick={() => void find()}>{starting ? 'Starting research…' : pending ? 'Research in progress…' : 'Find dealers'}</button></div>
     {mode === 'live' ? <label className="check"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />Use Fo to research public dealership websites for this specification and ZIP. This authorizes research only; no dealer outreach.</label> : <p className="small">Simulation shows synthetic dealers and makes no Fo or website requests.</p>}
     {error && <p role="alert" className="warning">{error}</p>}
-    {search && <div className="research-progress" role="status"><strong>{search.status.replaceAll('_', ' ')}</strong><p>{search.progress}</p>{pending && <small>Fo research can take several minutes. You can keep reviewing the form.</small>}</div>}
+    {search && <div className="research-progress" role="status"><strong>{search.error === 'fo_account_requires_review' ? 'Blocked by an earlier Fo action' : search.status.replaceAll('_', ' ')}</strong><p>{progress}</p>{pending && <small>Fo research can take several minutes. You can keep reviewing the form.</small>}</div>}
     {search?.status === 'complete' && <>
       <p className="small">{search.dealers.length} candidates · {search.dropped} excluded by checks. Availability needs confirmation. Select up to five sellers total.</p>
       {search.dealers.length === 0 && <p>No candidates passed the source and distance checks. You can add sellers manually below.</p>}

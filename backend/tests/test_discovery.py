@@ -128,6 +128,41 @@ def test_existing_account_pause_is_preserved(discovery):
     assert FoStore(service.fo_state).data["active"] == "uncertain-send"
 
 
+def test_blocked_unattempted_search_can_be_submitted_after_account_review(discovery):
+    service, client = discovery
+    with _TURN_LOCK:
+        state = FoStore(service.fo_state)
+        state.set_status("uncertain-send", "unclear", active=True)
+        result = service.submit(request())
+    id_ = result["id"]
+    assert settle(service, id_)["error"] == "fo_account_requires_review"
+    assert not client.asks
+    assert service.submit(request())["status"] == "needs_review"
+    with _TURN_LOCK:
+        # Simulate a completed, explicitly reviewed account release.
+        state = FoStore(service.fo_state)
+        state.set_status("uncertain-send", "unclear", active=False, review={"confirmed": True})
+    retried = service.submit(request())
+    assert retried["id"] == id_ and retried["cached"]
+    assert settle(service, id_)["status"] == "complete"
+    assert len(client.asks) == 1
+    assert service.submit(request())["id"] == id_ and len(client.asks) == 1
+
+
+@pytest.mark.parametrize("phase,cid,error", [("ask_pending", None, "research_requires_review"),
+                                           ("ask_pending", "known-id", "research_requires_review"),
+                                           ("new", "known-id", "fo_account_requires_review"),
+                                           ("inline_pending", "known-id", "invalid_report")])
+def test_resubmission_does_not_retry_an_attempted_or_uncertain_search(discovery, phase, cid, error):
+    service, client = discovery
+    service.stop.set(); service.wake.set(); service.thread.join(1)
+    id_, _ = service.store.create(request())
+    service.store.update(id_, status="needs_review", phase=phase, conversation_id=cid, error=error)
+    assert service.submit(request())["id"] == id_
+    assert service.store.view(id_)["status"] == "needs_review"
+    assert not client.asks
+
+
 def test_uncertain_attempt_without_conversation_is_never_reasked(discovery):
     service, client = discovery
     service.stop.set()

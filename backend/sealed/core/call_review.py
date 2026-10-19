@@ -19,6 +19,8 @@ MONEY_TOPIC = re.compile(r"\b(budget|maximum|max price|afford\w*|deposit\w*|paym
                          r"credit card|card number|financ\w*|down payment|monthly|"
                          r"(looking|able|willing|want(ing)?|going) to spend|can spend|how much .{0,30}spend)\b", re.I)
 FO_ROLES = {"assistant", "fo"}
+FOLLOWUP = re.compile(r"\b(?:i|we)(?:'ll| will| have|\s*'ve)\s+(?:call|retry|phone|email|schedule|set up)\b|"
+                      r"\bscheduling\s+(?:the\s+)?(?:retry|callback|reminder)\b", re.I)
 
 
 def review_call(turns: list[dict], brief: str) -> list[dict]:
@@ -28,6 +30,10 @@ def review_call(turns: list[dict], brief: str) -> list[dict]:
         text, role = turn.get("text", ""), turn.get("role", "")
         speaker = "fo" if role in FO_ROLES else "dealer"
         if speaker == "fo":
+            for match in FOLLOWUP.finditer(text):
+                if not NEGATED.search(text[max(0, match.start()-60):match.start()]):
+                    flags.append({"flag": "unrequested_followup", "turn": i, "speaker": speaker,
+                                  "excerpt": _excerpt(text, match.group(0))})
             for n in numbers_in(text):
                 if n not in allowed:
                     flags.append({"flag": "number_outside_brief", "turn": i, "speaker": speaker,

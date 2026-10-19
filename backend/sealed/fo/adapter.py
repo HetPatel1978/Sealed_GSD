@@ -137,6 +137,9 @@ class FoTransport:
         self.transcript: list[dict] = []     # every raw Fo result, for logs and debugging
 
     def send(self, now: float, msg: Outbound, approve_preview: Callable[[str], bool]) -> SendResult:
+        if msg.channel == "call" and msg.call_buyer is not None:
+            from sealed.fo.calls import CallTransport
+            return CallTransport(self.client, self.store.path).send(now, msg, approve_preview)
         if not msg.job_id or not msg.run_id:
             raise ValueError("A live Fo message requires job_id and run_id.")
         if msg.email_brief is not None and not payload_intact(msg):

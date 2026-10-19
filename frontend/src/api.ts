@@ -51,6 +51,7 @@ export async function request<T>(path: string, body?: unknown): Promise<T> {
 export const eventTypes = [
   'job.created', 'job.started', 'vendor.contacted', 'guard.checked', 'message.queued', 'message.suppressed',
   'message.sent', 'audit.checked', 'reply.received', 'quote.parsed', 'quote.verified', 'strategy.decided',
+  'call.pending', 'call.completed',
   'proposal.created', 'approval.requested', 'job.approved', 'job.rejected', 'job.needs_human', 'job.completed',
   'job.cancelled', 'error',
 ]

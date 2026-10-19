@@ -9,7 +9,7 @@ export default function Tabs({ tabs, active, onSelect }: { tabs: TabSpec[]; acti
       className={`tab ${active === t.id ? 'active' : ''}`} onClick={() => onSelect(t.id)}>
       {t.label}
       {t.count != null && <span className="tab-count">{t.count}</span>}
-      {t.alert && <span className="tab-dot alert" aria-label="needs review" />}
+      {t.alert && <span className="tab-dot" aria-label="needs review" />}
       {!t.alert && !!t.fresh && active !== t.id && <span className="tab-new">{t.fresh} new</span>}
     </button>)}</div>
 }

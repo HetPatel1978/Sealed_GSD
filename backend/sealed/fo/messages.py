@@ -7,9 +7,10 @@ Fo refuses to send text written as the user (spike 1b), so everything says "I'm 
 """
 
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sealed.core.models import Decision, EmailBrief, Job, Outbound
+from sealed.core.call_policy import expected_plan
 
 TAG_PREFIX = "SEALED-"
 BODY_START = "<<<EMAIL_BODY"
@@ -26,6 +27,8 @@ CALL_LIMITS = (
     "\"The buyer is comparing written out-the-door totals.\"\n"
     "- If the dealer says a price, do not accept or negotiate it; ask them to put it in an email.\n"
     "- Do not promise any follow-up, visit, test drive or callback.\n"
+    "- Do not schedule or initiate retries, reminders, tasks or other outreach, even after voicemail or closed hours.\n"
+    "- Use only the buyer identity in this brief; do not substitute the account owner or a remembered name.\n"
     "- Keep the call short and polite."
 )
 NO_PAYMENT_BY_EMAIL = "No payment is being made by email."
@@ -128,6 +131,15 @@ def wrap_call_for_fo(dealer_name: str, phone: str, brief: str) -> str:
         f"<<<CALL_BRIEF\n{brief}\nCALL_BRIEF>>>\n\n"
         "After the call, give me a short summary, including any price the dealer said, word for word."
     )
+
+
+def call_plan_request(msg: Outbound) -> str:
+    return ("Prepare a call plan ONLY. Do not dial, contact anyone or schedule anything yet. "
+        "The following JSON is the sole authorized plan DATA; return it INLINE unchanged only "
+        "if you can use this exact buyer identity and opening. Never substitute the account "
+        "owner or a name from memory. If the platform prevents this, explain and do not dial. "
+        "No emails, retries, reminders, tasks or follow-ups are authorized. Wait for a separate "
+        "Sealed instruction before placing the one call.\n" + expected_plan(msg).model_dump_json())
 
 
 def _sign(job: Job) -> str:
@@ -244,10 +256,11 @@ def build(job: Job, d: Decision, message_id: str, tag: str, cc: str, approved_pr
     sources = price_sources(d, approved_price)
     if d.channel == "call":
         body = call_brief(job, d, dealer.name, cc, emailed=bool(to))
-        return Outbound(message_id, d.dealer_id, d.kind, "call", d.round, dealer.phone or "", None, body,
+        msg = Outbound(message_id, d.dealer_id, d.kind, "call", d.round, dealer.phone or "", None, body,
                         wrap_call_for_fo(dealer.name, dealer.phone or "", body), d.offer, d.cited_quote_id,
                         frozenset(allowed), price_sources=sources, dealer_name=dealer.name,
-                        job_id=job.id, run_id=job.run_id)
+                        job_id=job.id, run_id=job.run_id, call_buyer=job.buyer)
+        return replace(msg, fo_instruction=call_plan_request(msg))
     if not to:
         raise ValueError(f"no email address for dealer {dealer.id}")
     if email_mode not in {"brief", "exact"}:

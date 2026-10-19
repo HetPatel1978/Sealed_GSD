@@ -1,11 +1,12 @@
 """Thin synchronous wrapper around the Fo MCP tools (mcp SDK 2.x, streamable HTTP).
 
-One MCP session lives on a background event loop thread; callers use plain blocking methods. The access
-token is refreshed (without a browser) before any call when it is near expiry, and the session reconnects
-with the new token. Results are the tools' `structured_content` dicts (Fo publishes output schemas).
+One MCP session lives on a background event loop thread; callers use plain blocking methods. FO_API_KEY
+uses direct bearer authentication. Without a key, OAuth tokens refresh before expiry and the session
+reconnects with the new token. Results are the tools' `structured_content` dicts.
 """
 
 import asyncio
+import os
 import threading
 from concurrent.futures import Future
 from typing import Protocol
@@ -33,8 +34,16 @@ class FoClient(Protocol):
 
 
 class LiveFoClient:
-    def __init__(self, storage: FileTokenStorage | None = None, url: str = FO_URL):
-        self.storage, self.url = storage or FileTokenStorage(), url
+    def __init__(self, storage: FileTokenStorage | None = None, url: str = FO_URL, *, api_key: str | None = None):
+        configured_key = api_key if api_key is not None else os.getenv("FO_API_KEY", "")
+        if not isinstance(configured_key, str):
+            raise ValueError("Fo API key must be a string.")
+        self._api_key = configured_key.strip()
+        if (len(self._api_key) > 2048 or any(ord(c) < 33 or ord(c) > 126 for c in self._api_key)):
+            raise ValueError("Fo API key contains invalid characters or is too long.")
+        self.auth_mode = "api_key" if self._api_key else "oauth"
+        self.storage = storage if storage is not None else (None if self._api_key else FileTokenStorage())
+        self.url = url
         self._closed = False
         self._state_lock = threading.Lock()
         self._requests = asyncio.Queue()
@@ -114,8 +123,11 @@ class LiveFoClient:
             await self._disconnect()
 
     async def _acall(self, tool: str, args: dict) -> dict:
-        refresh_if_needed(self.storage)
-        token = self.storage.load()["tokens"]["access_token"]
+        if self._api_key:
+            token = self._api_key
+        else:
+            refresh_if_needed(self.storage)
+            token = self.storage.load()["tokens"]["access_token"]
         if self._session is None or token != self._token:
             await self._disconnect()
             await self._connect(token)

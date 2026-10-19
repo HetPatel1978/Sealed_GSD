@@ -201,7 +201,7 @@ td.muted { text-transform: none; }
 .tab.active { color: #214f3d; border-bottom-color: #214f3d; }
 .tab-count { font-size: 11px; background: #eef1e6; color: #6b7a5a; padding: 1px 7px; border-radius: 9px; font-weight: 600; }
 .tab-new { font-size: 10px; background: #214f3d; color: #fff; padding: 2px 7px; border-radius: 9px; }
-.tab-dot.alert { width: 8px; height: 8px; border-radius: 50%; background: #c98a3a; display: inline-block; }
+.tab-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: #c98a3a; display: inline-block; }
 .ceiling-input .label-row { display: flex; align-items: center; justify-content: space-between; }
 .ceiling-input small { font-weight: 400; }
 .ceiling-input small.warning { padding: 0; }

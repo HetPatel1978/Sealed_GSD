@@ -148,6 +148,11 @@ export default function App() {
     const replied = j.vendors.filter(v => v.latest_quote?.firm).length
     const blocking = [...activity.alerts].reverse().find(a => a.blocking)
 
+    if (j.worker_status === 'call_in_progress' || j.worker_status === 'fo_busy_call') return <Step eyebrow="CALL RESULT PENDING" title={j.worker_status === 'fo_busy_call' ? 'Fo is finishing another call' : 'Waiting for Fo’s call result'}>
+      <p className="muted">Sealed is checking the existing call. It will not dial again. A completed call still needs a verified written quote before an offer can be approved.</p>
+      <div className="actions"><button className="secondary" onClick={() => openTab('dealers')}>View dealer history</button></div>
+    </Step>
+
     if (!j.ceiling_set && !TERMINAL.includes(j.state)) return <Step eyebrow="ACTION NEEDED" title="Restore your private ceiling">
       <p>The backend restarted. Your ceiling was kept only in memory, so enter it again to continue.</p>
       <form className="restore" onSubmit={e => { e.preventDefault(); void act(async () => { await request(`/jobs/${j.id}/private-runtime`, { ceiling: Number(restoreValue) }); setCeiling(Number(restoreValue)); setRestoreValue('') }) }}>

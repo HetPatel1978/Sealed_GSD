@@ -32,6 +32,8 @@ class SendResult:
     draft: EmailDraft | None = None       # reviewed draft; not proof of the delivered copy
     audit: EmailAudit | None = None       # authenticated Gmail result, never a Fo self-report
     queued: bool = False                 # durable outbox intent; never evidence of a send
+    pending_call: bool = False           # permission issued; observe the existing call, never dial again
+    call_report: dict | None = None      # static audited outcome; raw voice transcript stays local to Fo state
 
 
 class Transport(Protocol):
@@ -53,6 +55,9 @@ NOT_SENT = {
     "fo_failed": "Fo reported a failure. Nothing was sent; please review.",
     "send_unclear": "Fo's reply didn't clearly say it was sent. Not resent; check Gmail before retrying.",
     "payment_mention": "Fo's reply mentions a payment, purchase or order. Stopped; please review.",
+    "call_plan_rejected": "Fo's call plan did not match the buyer, phone or brief. No permission to dial was issued.",
+    "call_review": "The call result needs review for identity, follow-ups or transcript evidence. No call was repeated.",
+    "call_result_missing": "The call has no verifiable final result yet. It was not repeated; review the existing Fo conversation.",
 }
 
 
@@ -350,6 +355,9 @@ class Engine:
             return res.passed
 
         result = self.transport.send(t, msg, approve_preview)
+        if result.pending_call:
+            self.queued_messages.add(msg.message_id)
+            return self.on_send_result(t, msg.message_id, result)
         if result.queued:
             if result.sent or result.reason_code or result.draft or result.audit:
                 raise ValueError("Queued transport returned a send outcome.")
@@ -364,6 +372,13 @@ class Engine:
         if message_id not in self.queued_messages or result.queued:
             raise ValueError("No queued message awaits this result.")
         msg = self.outbound[message_id]
+        if result.pending_call:
+            if msg.channel != "call" or result.sent or result.reason_code:
+                raise ValueError("Invalid pending call result.")
+            if not any(event["data"].get("message_id") == message_id for event in self.log.of_type("call.pending")):
+                self.log.emit(t, "call.pending", msg.dealer_id, {"message_id": message_id,
+                    "state": "awaiting_result", "message": "The call is awaiting Fo's final result. It will not be dialed again."})
+            return t
         self.queued_messages.remove(message_id)
         t = self._finish_send(t, msg, result)
         if msg.kind == "booking" and self.state == "BOOKING" and self.booking_message == message_id:
@@ -375,6 +390,10 @@ class Engine:
                 and (result.draft is None or not self.guard.check_email(msg, result.draft).passed)):
             result.reason_code = result.reason_code or "audit_mismatch"
         safe_note = self.guard.safe_note(msg, result.note)
+        if result.call_report is not None:
+            self.log.emit(result.sent_at, "call.completed", msg.dealer_id, {
+                "message_id": msg.message_id, **result.call_report, "source": "fo_report",
+                "written_quote": False})
         for err in result.errors:
             self.log.emit(t + 0.6, "error", msg.dealer_id, err)
         if not result.sent:
@@ -402,7 +421,8 @@ class Engine:
             "to": msg.to if msg.channel == "email" else f"{self.job.dealer(msg.dealer_id).name} sales line",
             "subject": msg.subject, "body": event_body, "offer": msg.offer, "cited_quote_id": msg.cited_quote_id,
             "numbers": messages.number_provenance(replace(msg, body=event_body), self.job), **content})
-        if msg.dealer_id not in self.contacted and msg.kind == "rfq":
+        reached = result.call_report is None or result.call_report.get("outcome") == "connected"
+        if msg.dealer_id not in self.contacted and msg.kind == "rfq" and reached:
             self.contacted.add(msg.dealer_id)
             self.log.emit(st, "vendor.contacted", msg.dealer_id, {"message_id": msg.message_id, "round": msg.round})
         if msg.kind == "booking":

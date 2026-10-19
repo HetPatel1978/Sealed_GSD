@@ -23,7 +23,13 @@ class Discovery:
         self.thread.start()
 
     def submit(self, request):
-        id_, cached = self.store.create(request)
+        retry_unattempted = False
+        if self.mode == "live" and _TURN_LOCK.acquire(blocking=False):
+            try:
+                retry_unattempted = not FoStore(self.fo_state).data.get("active")
+            finally:
+                _TURN_LOCK.release()
+        id_, cached = self.store.create(request, retry_unattempted=retry_unattempted)
         self.wake.set()
         return {**self.store.view(id_), "cached": cached}
 

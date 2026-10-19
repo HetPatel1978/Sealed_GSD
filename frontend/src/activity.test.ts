@@ -52,3 +52,22 @@ group('buildActivity on mock/events.json', () => {
     for (const e of events) expect(describe(e, names)).not.toMatch(/: [a-z]+\.[a-z_]+$/)
   })
 })
+
+group('call lifecycle activity', () => {
+  it('shows pending/completed calls without creating a quote or a spoken-price offer', () => {
+    const base = events[0]
+    const updates: SealedEvent[] = [base,
+      { ...base, id: 2, type: 'call.pending', vendor_id: 'v_northline', data: { message_id: 'm_01' } },
+      { ...base, id: 3, type: 'call.completed', vendor_id: 'v_northline', data: {
+        message_id: 'm_01', outcome: 'no_answer', identity_verified: false, identity_status: 'not_spoken', written_quote: false,
+      } }]
+    const result = buildActivity(updates)
+    const dealer = result.dealers.find(d => d.id === 'v_northline')!
+    expect(dealer.items.map(item => item.kind)).toEqual(['decision', 'decision'])
+    expect(result.quotes.size).toBe(0)
+    expect(dealer.latest_quote).toBeNull()
+    const names = new Map([[dealer.id, dealer.name]])
+    expect(describe(updates[1], names)).toContain('existing call result')
+    expect(describe(updates[2], names)).toContain('no answer')
+  })
+})

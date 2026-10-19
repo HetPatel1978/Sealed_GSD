@@ -48,7 +48,7 @@ pytest
 
 The API has no login (and `GET /jobs/{id}/ceiling` returns the ceiling), so it is **local only**: it binds to 127.0.0.1, refuses requests from any other machine (403) or with a non-local `Host` header (400), and CORS allows exactly one localhost dashboard origin (`SEALED_DASHBOARD_ORIGIN`, default `http://localhost:3000`). A bad setting stops startup. See `backend/app/security.py`.
 
-Credentials (Fo OAuth token, Gmail app password, Anthropic key) load from environment variables only. Copy `.env.example` to `.env` and fill it in locally. `.env` and token files are gitignored.
+Credentials stay local: set `FO_API_KEY` for direct Fo bearer authentication, or leave it blank to use the existing OAuth token file. Gmail and Anthropic credentials load from environment variables. Copy `.env.example` to `.env` and fill it in locally. `.env` and token files are gitignored. See [Fo authentication](docs/fo_adapter.md#authentication).
 
 The Fo adapter's local checks and controlled live email test are documented in [docs/fo_adapter.md](docs/fo_adapter.md). The smoke command is a dry run by default; its state lives in gitignored `.sealed/`.
 

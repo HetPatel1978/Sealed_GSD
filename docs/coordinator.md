@@ -1,5 +1,11 @@
 # Background negotiation coordinator
 
+New checked-plan calls persist an in-progress outbox receipt and are observed
+through their existing Fo conversation, including after restart/cancellation.
+Observation is read-only and can run without IMAP or private-ceiling restoration.
+Pending calls hold later account outreach and timers; spoken prices never become
+written offers. See [the call lifecycle and limits](calls.md).
+
 `sealed.service` connects Gmail staging, isolated quote parsing, durable engine
 delivery, scheduled round transitions and guarded Fo dispatch. It keeps the fixed
 two-round strategy; it does not bargain indefinitely until a target is reached.

@@ -8,6 +8,14 @@ Base URL (local): `http://127.0.0.1:8000`. **Local only:** the server binds to 1
 
 ## Current implementation (2026-10-18)
 
+New checked-plan calls publish `call.pending` and `call.completed`. While awaiting
+the existing call result, worker status is `call_in_progress` and dealer state is
+`CALL_IN_PROGRESS`; an account occupied by another pending call can report
+`fo_busy_call`. Completion metadata includes `outcome`, `identity_verified`,
+`identity_status`, `followups_clear`, `transcript_complete`, `flags`,
+`source: fo_report` and `written_quote: false`. These events never turn spoken
+prices into written quotes. See [call lifecycle](calls.md).
+
 Job creation, reads, start, SSE, exact-term approvals, rejection, cancellation,
 receipts and simulation advance are implemented and connected to the dashboard.
 See [dashboard operations](dashboard.md). V1 creates one item (`spec.quantity: 1`)

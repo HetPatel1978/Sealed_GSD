@@ -91,6 +91,11 @@ An existing uncertain account reservation is preserved. While research holds the
 turn, negotiation ticks report `fo_busy_research` and defer dispatch. The API's
 process lock still excludes a competing live CLI worker.
 
+If an earlier uncertain call blocks research, use the [reviewed call recovery
+procedure](call_review.md). Once the account is released, explicitly resubmitting
+the same requirements requeues a search that never reached Fo. Attempted or
+uncertain searches are not automatically repeated.
+
 The worker records a durable claim before asking once. Known pending conversation
 IDs are polled after restart; unknown/uncertain attempts require review and are
 never blindly resent. A completed response that lacks valid inline JSON gets at

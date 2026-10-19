@@ -134,7 +134,9 @@ def test_routing_addresses_are_not_mistaken_for_commitments():
 def test_call_preview_must_preserve_the_entire_brief():
     msg = build(DECISIONS[4])
     g = Guard(FakeChecker())
-    assert g.check(msg, preview=f"Here's the call brief:\n{msg.body}\nShall I place the call?").passed
+    from sealed.core.call_policy import expected_plan
+    assert g.check(msg, preview=expected_plan(msg).model_dump_json()).passed
+    assert not g.check(msg, preview=f"Here's the call brief:\n{msg.body}\nShall I place the call?").passed
     assert not g.check(msg, preview=msg.body + " You can offer 28000 dollars.").passed
 
 
@@ -142,7 +144,7 @@ def test_call_brief_has_goal_facts_limits_and_only_ledger_prices():
     msg = build(DECISIONS[4])
     assert msg.body.startswith("Goal: ") and "Allowed facts" in msg.body and messages.CALL_LIMITS in msg.body
     assert re.findall(r"\$[\d,]+", msg.body) == ["$30,690"]
-    assert "CALL_BRIEF" in msg.fo_instruction and "in your own words" in msg.fo_instruction
+    assert "Prepare a call plan ONLY" in msg.fo_instruction and "Do not dial" in msg.fo_instruction
     nudge = build(DECISIONS[2])
     assert "$" not in nudge.body and "no reply yet" in nudge.body
 

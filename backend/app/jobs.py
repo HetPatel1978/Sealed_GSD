@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from sealed.core.ledger import latest_written
 from sealed.core.models import Dealer, Job
 from sealed.fo.messages import new_tag
-from sealed.fo.adapter import _TURN_LOCK
+from sealed.fo.adapter import Store as FoStore, _TURN_LOCK
 from sealed.discovery.models import DiscoveryError
 from sealed.ingest.deliver import DeliveryStore
 from sealed.ingest.gmail import GmailError, GmailReader
@@ -131,6 +131,7 @@ class JobService:
         runtime = self.runtime(job_id, eng.job.run_id)
         current = {q.dealer_id: q for q in latest_written(eng.ledger.quotes)}
         vendors = []
+        active_calls = {m.dealer_id for m in self.store.pending_calls(self.account, eng.job.id, eng.job.run_id)}
         for d in eng.job.dealers:
             quote = current.get(d.id)
             sent = [e for e in eng.log.of_type("message.sent") if e["vendor_id"] == d.id]
@@ -139,6 +140,8 @@ class JobService:
                 state = "QUOTE_RECEIVED"
             if sent and sent[-1]["data"]["kind"] in {"counter", "price_match"}:
                 state = "COUNTERED"
+            if d.id in active_calls:
+                state = "CALL_IN_PROGRESS"
             if eng.proposal and eng.proposal["vendor_id"] == d.id:
                 state = {"AWAITING_APPROVAL": "SELECTED", "BOOKING": "BOOKING_SENT", "COMPLETED": "VERIFIED"}.get(eng.state, state)
             if d.id in eng.flagged:
@@ -205,9 +208,19 @@ class JobService:
             if not row[2]:
                 continue
             eng = self.engine(id_)
+            if self.mode == "live" and self.store.pending_calls(self.account, id_, row[0]):
+                # Read-only call observation does not need IMAP, the parser or a
+                # restored ceiling. The stored call already had dialing permission.
+                status = self.local_coordinator(id_).poll_calls((id_, row[0]))
+                self.store.db.execute("UPDATE api_jobs SET worker_status=? WHERE job_id=?", (status, id_))
+                continue
             if eng.state in {"COMPLETED", "CANCELLED", "NEEDS_HUMAN"}:
                 self.store.db.execute("UPDATE api_jobs SET worker_status=? WHERE job_id=?", (eng.state.lower(), id_))
                 continue
+            if self.mode == "live":
+                if FoStore(self.fo_state).data.get("active") and not self.store.pending_calls(self.account):
+                    self.store.db.execute("UPDATE api_jobs SET worker_status='fo_account_requires_review' WHERE job_id=?", (id_,))
+                    continue
             if not self.runtime(id_, row[0]).ready:
                 self.store.db.execute("UPDATE api_jobs SET worker_status='private_runtime_required' WHERE job_id=?", (id_,))
                 continue

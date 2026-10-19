@@ -112,6 +112,15 @@ export function buildActivity(events: SealedEvent[]): Activity {
         dealer(vid).items.push(m)
         break
       }
+      case 'call.pending':
+      case 'call.completed': {
+        if (!vid) break
+        dealer(vid).items.push({ kind: 'decision', event_id: e.id, ts: e.ts, channel: 'call', offer: null,
+          action: e.type === 'call.pending' ? 'call pending' : 'call completed',
+          reason: e.type === 'call.pending' ? 'Waiting for the existing call result. No repeat call will be placed.'
+            : `Fo-reported outcome: ${String(d.outcome ?? 'unknown').replaceAll('_', ' ')}. ${d.identity_status === 'not_spoken' ? 'No introduction was spoken.' : d.identity_verified ? 'Buyer identity checked.' : 'Buyer identity needs review.'} A spoken price is not a written quote.` })
+        break
+      }
       case 'guard.checked': {
         const id = String(d.message_id)
         const passed = (guardResults.get(id) ?? true) && d.passed === true
@@ -193,6 +202,8 @@ export function describe(e: SealedEvent, names: Map<string, string>): string {
     case 'guard.checked': return `${who}: ${kind} ${d.passed ? 'passed' : 'BLOCKED by'} the ${d.stage === 'fo_preview' ? "Fo-preview" : 'pre-send'} check`
     case 'message.sent': return `${who}: ${kind} sent by ${d.channel === 'call' ? 'call' : 'email'}${d.offer != null ? `, asking ${money(d.offer)}` : ''}`
     case 'message.queued': return `${who}: ${kind || 'message'} queued for Fo`
+    case 'call.pending': return `${who}: waiting for the existing call result`
+    case 'call.completed': return `${who}: call ended (${String(d.outcome ?? 'unknown').replaceAll('_', ' ')})`
     case 'message.suppressed': return `${who}: ${kind || 'message'} not sent (${String(d.reason ?? d.reason_code ?? 'suppressed').replaceAll('_', ' ')})`
     case 'audit.checked': return `${who}: sent copy ${d.matched ? 'matches' : 'DIFFERS from'} our text`
     case 'reply.received': return `${who}: ${d.source === 'call' ? 'call summary' : d.source === 'fo_relay' ? 'reply relayed by Fo' : 'written reply'} received`

@@ -160,6 +160,7 @@ class Outbound:
     email_brief: EmailBrief | None = None  # None preserves legacy exact-send payloads/replays
     reply_to_message_id: str | None = None  # actual incoming RFC Message-ID, not an internal ID
     reply_thread_id: str | None = None      # trusted incoming Gmail thread
+    call_buyer: str | None = None           # checked-plan call contract; None preserves legacy attempts
 
 
 def outbound_fingerprint(msg: Outbound) -> str:
@@ -170,6 +171,8 @@ def outbound_fingerprint(msg: Outbound) -> str:
         parts.append(asdict(msg.email_brief))
     if msg.reply_to_message_id is not None or msg.reply_thread_id is not None:
         parts.append([msg.reply_to_message_id, msg.reply_thread_id])
+    if msg.call_buyer is not None:
+        parts.append(["sealed-call-v1", msg.call_buyer])
     return hashlib.sha256(json.dumps(parts).encode("utf-8")).hexdigest()
 
 

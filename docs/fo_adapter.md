@@ -1,5 +1,23 @@
 # Fo adapter: validation and controlled live acceptance
 
+**Current call contract:** new calls require a checked buyer/phone/opening plan
+before one dialing permission, then durable read-only observation until the final
+call report. See [call lifecycle, validation and provider limits](calls.md).
+
+## Authentication
+
+Set `FO_API_KEY` in the gitignored root `.env` to use Wajo's direct API-key
+authentication. `LiveFoClient` sends it as `Authorization: Bearer <key>` to the
+Fo MCP endpoint (`https://mcp.api.wajo.ai/fo` by default). Keep it out of frontend
+`VITE_*` settings, prompts, logs and committed files. Restart the backend after
+changing `.env` so it loads the new setting.
+
+A nonempty API key takes precedence over the existing OAuth file. Key mode does
+not construct/read OAuth storage, refresh OAuth tokens or silently fall back to
+OAuth if the key is rejected. With `FO_API_KEY` blank/unset, the existing OAuth
+path remains available and refreshes tokens before expiry. Key changes do not
+clear account reservations, change job permissions or authorize dealer outreach.
+
 **Current email contract:** new job emails use [Fo-composed drafts from briefs](fo_briefs.md)
 (decision 16). The smoke command below deliberately remains the legacy exact-text test; its
 recorded payload and review marker are unchanged. New brief-based emails require a checked
@@ -47,7 +65,7 @@ After the teammate approves this email, send that same request:
 python -m sealed.fo.smoke --to rfb5381@psu.edu --yes-send
 ```
 
-The existing Fo OAuth file must be configured. Tokens refresh without opening a browser. No credentials
+Configure `FO_API_KEY` or the existing Fo OAuth file. OAuth tokens refresh without opening a browser. No credentials
 or raw HTTP/SDK exception strings are printed. The adapter state defaults to `.sealed/fo_state.json`,
 which is gitignored. Use that same state file for every adapter instance on this account.
 
@@ -75,7 +93,8 @@ in this smoke command.
   explicitly says no payment is being made by email.
 - Unresolved or flagged activity keeps an active marker across restarts. Further sends stop for human
   review. Inspect Fo and Gmail, retain the message records, and reconcile the state only after the
-  outcome is known. Automatic review/release is not implemented. Do not delete the state file or change
+  outcome is known. A limited [operator-reviewed call release](call_review.md) is available; automatic
+  review/release is not implemented. Do not delete the state file or change
   run IDs to force a resend.
 - Nonempty unscoped legacy files are rejected unchanged. They need explicit review rather than a
   guessed migration that might duplicate an earlier send.

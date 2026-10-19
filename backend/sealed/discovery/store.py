@@ -34,7 +34,7 @@ class Store:
         finally:
             db.close()
 
-    def create(self, request):
+    def create(self, request, *, retry_unattempted=False):
         encoded = request.model_dump_json()
         digest = hashlib.sha256(("fo-discovery-v1:" + self.mode + ":" + encoded).encode()).hexdigest()
         now = time.time()
@@ -42,6 +42,13 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM discovery_jobs WHERE scope=? AND fingerprint=? ORDER BY created DESC LIMIT 1", (self.scope, digest)).fetchone()
             if row and (row["status"] != "complete" or now-row["updated"] < 3600):
+                if (retry_unattempted and row["status"] == "needs_review" and row["phase"] == "new"
+                        and row["error"] == "fo_account_requires_review" and row["polls"] == 0
+                        and not row["conversation_id"] and not row["raw_reply"] and not row["result"]):
+                    # This search never reached Fo. Explicit resubmission may queue
+                    # it once the account reservation has been reviewed and cleared.
+                    db.execute("UPDATE discovery_jobs SET status='queued',error=NULL,updated=? WHERE id=? AND scope=?",
+                               (now, row["id"], self.scope))
                 return row["id"], True
             id_ = "search_" + uuid4().hex[:16]
             db.execute("INSERT INTO discovery_jobs(id,scope,fingerprint,created,updated,request,status,phase) VALUES (?,?,?,?,?,?,?,?)",

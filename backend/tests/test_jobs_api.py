@@ -344,3 +344,39 @@ def test_slow_live_research_keeps_api_responsive_and_defers_negotiation_tick(tmp
             assert time.monotonic()-before < 1.5
         finally:
             release.set()
+
+
+def test_api_tracks_pending_call_and_observes_it_without_private_restore_or_imap(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from sealed.service.sim_demo import Extractor, Mailbox
+    from tests.test_call_lifecycle import Provider, report
+    monkeypatch.setenv("GMAIL_ADDRESS", "buyer@example.com")
+    reader = Mailbox()
+    monkeypatch.setattr("app.jobs.GmailReader", lambda *a: nullcontext(reader))
+    monkeypatch.setattr("app.jobs.QuoteParser", lambda *a: nullcontext(Extractor()))
+    with local(create_app(data_dir=tmp_path, mode="live", background=False, fo_state=tmp_path / "fo.json")) as client:
+        body = payload(buyer="Hari", vendors=[{"name": "Call seller", "phone": "+1-215-555-0101", "mode": "live"}])
+        job = client.post("/jobs", json=body).json()
+        id_ = job["id"]
+        response = client.post(f"/jobs/{id_}/start", json={"allow_model_requests": True, "allow_dispatch": True, "allow_calls": True})
+        assert response.status_code == 200
+        svc, executor = client.app.state.service, client.app.state.executor
+        msg = executor.submit(lambda: next(iter(svc.engine(id_).outbound.values()))).result(3)
+        provider = Provider(msg)
+        provider.close = lambda: None
+        monkeypatch.setattr("sealed.service.live.LiveFoClient", lambda: provider)
+        executor.submit(svc.tick).result(3)
+        current = client.get(f"/jobs/{id_}").json()
+        assert current["state"] == "RUNNING" and current["worker_status"] == "call_in_progress"
+        assert current["vendors"][0]["state"] == "CALL_IN_PROGRESS"
+        events = client.get(f"/jobs/{id_}/events?follow=false").text
+        assert '"type": "call.pending"' in events and '"type": "job.needs_human"' not in events
+        vault.forget(id_)
+        monkeypatch.setattr("app.jobs.GmailReader", lambda *a: pytest.fail("IMAP used for existing-call observation"))
+        provider.turns = [{"role": "assistant", "text": report(msg).model_dump_json()}]
+        executor.submit(svc.tick).result(3)
+        current = client.get(f"/jobs/{id_}").json()
+        assert current["state"] == "RUNNING" and current["ceiling_set"] is False
+        assert current["vendors"][0]["latest_quote"] is None
+        assert '"type": "call.completed"' in client.get(f"/jobs/{id_}/events?follow=false").text
+        assert len(provider.asks) == 2

@@ -92,6 +92,11 @@ def payload_intact(msg: Outbound) -> bool:
                 return False
         return _squash(msg.fo_instruction) == _squash(wrap_for_fo(msg.to, msg.cc, msg.subject or "", msg.body))
     if msg.channel == "call":
+        if msg.call_buyer is not None:
+            from sealed.fo.messages import call_plan_request
+            return (bool(msg.to and msg.call_buyer.strip())
+                    and not any(c in msg.call_buyer for c in "\r\n\x00")
+                    and msg.fo_instruction == call_plan_request(msg))
         return _squash(msg.fo_instruction) == _squash(wrap_call_for_fo(msg.dealer_name, msg.to, msg.body))
     return False
 
@@ -108,6 +113,10 @@ class Guard:
         return None if self._checker.contains_secret(masked) or BUDGET_WORDS.search(note) else note[:500]
 
     def check(self, msg: Outbound, preview: str | None = None) -> GuardResult:
+        if msg.call_buyer is not None and preview is not None:
+            from sealed.core.call_policy import plan_matches
+            rules = [*self.check(msg).rules, {"rule": "call_plan_matches", "passed": plan_matches(msg, preview)}]
+            return GuardResult(all(rule["passed"] for rule in rules), "fo_preview", rules)
         if msg.email_brief is not None and preview is not None:
             draft = parse_draft(preview)
             if draft is None:

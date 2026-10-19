@@ -136,7 +136,7 @@ class Coordinator:
     def _advance(self, scope, runtime):
         with self.store.transaction():
             eng = self._load(scope, runtime)
-            if self._cancelled(scope) or self.store.in_flight(self.account, *scope):
+            if self._cancelled(scope) or self.store.in_flight(self.account, *scope) or self.store.pending_calls(self.account, *scope):
                 return None
             if self.store.outbox(self.account, *scope):
                 return None
@@ -167,10 +167,31 @@ class Coordinator:
                 return name
         return None
 
+    def poll_calls(self, scope):
+        """Observe existing call claims without constructing a parser or sending anything."""
+        runtime = self._runtime(scope)
+        service = self._service(scope, runtime)
+        for msg in self.store.pending_calls(self.account, *scope):
+            eng = self._load(scope, runtime)
+            service.poll_call(msg.message_id, job_id=scope[0], run_id=scope[1], now=self._minutes(eng),
+                              transport=self.transport_factory(eng))
+        eng = self._load(scope, runtime)
+        if eng.state in {"CANCELLED", "NEEDS_HUMAN"}:
+            return eng.state.lower()
+        return "call_in_progress" if self.store.pending_calls(self.account, *scope) else eng.state.lower()
+
     def tick(self, *, scopes=None):
         selected = self.scopes() if scopes is None else list(scopes)
         if self.reader.address.casefold() != self.account:
             raise DeliveryError("mailbox_account_mismatch")
+        # Observation continues through restart/cancellation and mail outages.
+        # No call permission is repeated, even for a recovered dispatching claim.
+        for scope in selected:
+            if self.store.pending_calls(self.account, *scope):
+                self.poll_calls(scope)
+        if self.store.pending_calls(self.account):
+            return {"status": "call_in_progress" if any(self.store.pending_calls(self.account, *s) for s in selected) else "fo_busy_call",
+                    "runs": [], "dispatched": 0}
         bindings = self._all_bindings(selected)
         try:
             counts = poll(self.reader, self.inbox, bindings) if bindings else None
@@ -260,6 +281,10 @@ class Coordinator:
                 if outcome == "review":
                     blocked = True
                     report["status"] = "needs_human"
+                    break
+                if outcome == "call_pending":
+                    blocked = True
+                    report["status"] = "call_in_progress"
                     break
             if not blocked:
                 report["transition"] = self._advance(scope, runtime)

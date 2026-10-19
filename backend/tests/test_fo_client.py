@@ -26,6 +26,11 @@ class InitializeFailure(Exception):
     pass
 
 
+@pytest.fixture(autouse=True)
+def isolate_fo_credentials(monkeypatch):
+    monkeypatch.delenv("FO_API_KEY", raising=False)
+
+
 @pytest.fixture
 def fake_mcp(monkeypatch):
     events, calls, script = [], [], []
@@ -36,6 +41,7 @@ def fake_mcp(monkeypatch):
     async def http(**kwargs):
         owner = asyncio.current_task()
         events.append(("http_open", owner))
+        storage.last_headers = kwargs["headers"]
         try:
             yield object()
         finally:
@@ -183,3 +189,71 @@ def test_real_sdk_no_response_timeout_uses_polling_exception_type(monkeypatch):
         assert exc.value.__cause__.code == REQUEST_TIMEOUT
     finally:
         client.close()
+
+
+def test_environment_key_uses_bearer_header_without_oauth_reads_or_refresh(fake_mcp, monkeypatch):
+    storage, script, calls, events = fake_mcp
+    monkeypatch.setenv("FO_API_KEY", "wak_test_key_only")
+    monkeypatch.setattr(storage, "load", lambda: pytest.fail("OAuth state read in API-key mode"))
+    monkeypatch.setattr(module, "refresh_if_needed", lambda _: pytest.fail("OAuth refresh in API-key mode"))
+    script.extend([{"conversations": []}, {"conversations": []}])
+    client = LiveFoClient(storage)
+    try:
+        assert client.auth_mode == "api_key"
+        assert client.conversations() == [] and client.conversations() == []
+        assert storage.last_headers == {"Authorization": "Bearer wak_test_key_only"}
+        assert [name for name, args in calls] == ["list_fo_conversations", "list_fo_conversations"]
+    finally:
+        client.close()
+    assert [name for name, _ in events].count("http_open") == 1
+
+
+def test_api_key_does_not_construct_oauth_storage(fake_mcp, monkeypatch):
+    monkeypatch.setattr(module, "FileTokenStorage", lambda: pytest.fail("OAuth storage constructed"))
+    client = LiveFoClient(api_key="wak_explicit_test_key")
+    try:
+        assert client.storage is None
+        client.conversations()
+        assert fake_mcp[0].last_headers["Authorization"] == "Bearer wak_explicit_test_key"
+    finally:
+        client.close()
+
+
+def test_api_key_auth_error_never_falls_back_to_oauth(fake_mcp, monkeypatch):
+    storage, script, calls, events = fake_mcp
+    monkeypatch.setattr(storage, "load", lambda: pytest.fail("Silently fell back to OAuth"))
+    monkeypatch.setattr(module, "refresh_if_needed", lambda _: pytest.fail("Silently refreshed OAuth"))
+    script.append(MCPError(-32603, "Unauthorized"))
+    client = LiveFoClient(storage, api_key="wak_rejected_test_key")
+    try:
+        with pytest.raises(MCPError):
+            client.conversations()
+        assert len(calls) == 1
+        assert storage.last_headers["Authorization"] == "Bearer wak_rejected_test_key"
+    finally:
+        client.close()
+
+
+def test_explicit_key_overrides_environment_and_blank_explicit_key_selects_oauth(fake_mcp, monkeypatch):
+    storage = fake_mcp[0]
+    monkeypatch.setenv("FO_API_KEY", "wak_environment_test_key")
+    client = LiveFoClient(storage, api_key="wak_explicit_test_key")
+    try:
+        client.conversations()
+        assert storage.last_headers["Authorization"] == "Bearer wak_explicit_test_key"
+    finally:
+        client.close()
+    client = LiveFoClient(storage, api_key="")
+    try:
+        client.conversations()
+        assert client.auth_mode == "oauth"
+        assert storage.last_headers["Authorization"] == "Bearer fake-token-one"
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("key", ["wak_invalid\r\nInjected: value", "wak_invalid key", "wak_nonascii_\u00e9"])
+def test_invalid_key_is_rejected_without_echoing_its_value(key):
+    with pytest.raises(ValueError) as error:
+        LiveFoClient(api_key=key)
+    assert key not in str(error.value)

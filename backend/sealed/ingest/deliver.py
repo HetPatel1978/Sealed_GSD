@@ -154,6 +154,15 @@ class DeliveryStore:
         return bool(self.db.execute("SELECT 1 FROM engine_outbox WHERE account=? AND job_id=? AND run_id=? AND status='dispatching'",
                                    (account.casefold(), job_id, run_id)).fetchone())
 
+    def pending_calls(self, account, job_id=None, run_id=None):
+        query = "SELECT payload FROM engine_outbox WHERE account=? AND status IN ('call_pending','dispatching')"
+        args = [account.casefold()]
+        if job_id is not None:
+            query += " AND job_id=? AND run_id=?"
+            args.extend([job_id, run_id])
+        messages = [OUTBOUND.validate_json(row[0]) for row in self.db.execute(query, args)]
+        return [msg for msg in messages if msg.channel == "call" and msg.call_buyer is not None]
+
     def trusted_bindings(self, account, job_id, run_id):
         return [Binding(**json.loads(row[0])) for row in self.db.execute(
             "SELECT binding FROM engine_mail_bindings WHERE account=? AND job_id=? AND run_id=? ORDER BY rowid",
@@ -289,7 +298,7 @@ class ReplyDelivery:
                 raise DeliveryError("outbox_not_pending_do_not_resend")
             if engine.state not in {"RUNNING", "BOOKING", "AWAITING_APPROVAL", "WAITING_AFTER_REJECT"}:
                 raise DeliveryError("job_paused")
-            if self.store.db.execute("SELECT 1 FROM engine_outbox WHERE account=? AND status='dispatching'", (self.account,)).fetchone():
+            if self.store.db.execute("SELECT 1 FROM engine_outbox WHERE account=? AND status IN ('dispatching','call_pending')", (self.account,)).fetchone():
                 raise DeliveryError("outreach_in_progress")
             msg = engine.outbound[message_id]
             # Recheck current ledger authority before dispatching any queued prices.
@@ -332,8 +341,38 @@ class ReplyDelivery:
                     evidence.received_at, message_id, evidence.message_id, evidence.thread_id)
                 self.store.db.execute("INSERT INTO engine_mail_bindings VALUES (?,?,?,?,?)", (*key, _json(asdict(binding))))
             stored_result = {"sent": result.sent, "sent_at": result.sent_at, "reason_code": result.reason_code,
+                "pending_call": result.pending_call, "call_report": result.call_report,
                 "audit": asdict(result.audit) if result.audit else None}
             self.store.db.execute("UPDATE engine_outbox SET status=?,result=? WHERE account=? AND job_id=? AND run_id=? AND message_id=?",
-                ("sent" if result.sent and result.reason_code is None else "review", _json(stored_result), *key))
+                ("call_pending" if result.pending_call else "sent" if result.sent and result.reason_code is None else "review", _json(stored_result), *key))
             self.store._save(self.account, engine)
-        return "sent" if result.sent and result.reason_code is None else "review"
+        return "call_pending" if result.pending_call else "sent" if result.sent and result.reason_code is None else "review"
+
+    def poll_call(self, message_id, *, job_id, run_id, now, transport):
+        """Observe a durable call claim, including a crash after dial permission.
+
+        poll_call on the transport is strictly read-only with respect to Fo.
+        It never resumes an old unclear/legacy attempt or repeats permission.
+        """
+        key = (self.account, job_id, run_id, message_id)
+        engine = self._load(job_id, run_id)
+        msg = engine.outbound[message_id]
+        row = self.store.db.execute("SELECT status FROM engine_outbox WHERE account=? AND job_id=? AND run_id=? AND message_id=?", key).fetchone()
+        if not row or row[0] not in {"call_pending", "dispatching"} or not msg.call_buyer:
+            raise DeliveryError("call_not_pending")
+        result = transport.poll_call(now, msg)
+        with self.store.transaction():
+            current = self.store.db.execute("SELECT status FROM engine_outbox WHERE account=? AND job_id=? AND run_id=? AND message_id=?", key).fetchone()
+            if not current or current[0] not in {"call_pending", "dispatching"}:
+                raise DeliveryError("call_not_pending")
+            engine = self._load(job_id, run_id)
+            cancelled = engine.state == "CANCELLED"
+            engine.on_send_result(now, message_id, result)
+            if cancelled:
+                engine.state = "CANCELLED"
+            status = "call_pending" if result.pending_call else "sent" if result.sent and not result.reason_code else "review"
+            self.store.db.execute("UPDATE engine_outbox SET status=?,result=? WHERE account=? AND job_id=? AND run_id=? AND message_id=?",
+                (status, _json({"sent": result.sent, "sent_at": result.sent_at, "reason_code": result.reason_code,
+                               "pending_call": result.pending_call, "call_report": result.call_report}), *key))
+            self.store._save(self.account, engine)
+        return status

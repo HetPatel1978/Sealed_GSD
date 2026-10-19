@@ -20,3 +20,11 @@ class LiveTransport:
                 return FoTransport(client, self.state, sent_auditor=audit).send(now, msg, approve_preview)
             finally:
                 client.close()
+
+    def poll_call(self, now, msg):
+        from sealed.fo.calls import CallTransport
+        client = LiveFoClient()
+        try:
+            return CallTransport(client, self.state).poll_call(now, msg)
+        finally:
+            client.close()
