@@ -1,0 +1,44 @@
+flowchart TB
+    GMAIL["Gmail IMAP: seller's written reply and trusted receipt time"] --> ID{"Known sender, authentication and job association pass?"}
+    ID -->|No or ambiguous| REVIEW["Identity review; unknown sender cannot establish phone-only dealer identity"]
+    ID -->|Yes| STAGE["Stage cleaned seller text; deduplicate by account and Gmail message ID"]
+    STAGE --> CACHE{"Matching validated parse cached?"}
+    CACHE -->|Yes| VALIDATE
+    CACHE -->|No| PERMIT{"Model processing authorized?"}
+    PERMIT -->|No| WAIT["Wait for authorization; do not export reply text"]
+    PERMIT -->|Yes| CLAUDE["Tool-free Claude extraction: cleaned text, public spec, currency and receipt time"]
+    CLAUDE --> VALIDATE["Code checks literal price evidence, all-in terms, spec, dates, expiry and fee breakdown"]
+    VALIDATE --> COMMIT["Apply reply; atomically commit receipt, checkpoint, events and guarded outbox intents"]
+    COMMIT --> ACK["Acknowledge staged inbox item only after successful commit"]
+    COMMIT --> LEDGER["Ledger determines quote authority and firmness; newer written terms supersede older ones"]
+    LEDGER --> SUSPICIOUS{"Suspicious instructions or integration failure?"}
+    SUSPICIOUS -->|Yes| HUMAN["Flag or pause as applicable; never treat seller instructions as authority"]
+    SUSPICIOUS -->|No| FIRM{"Firm current written out-the-door offer?"}
+    FIRM -->|No, not declined and not yet clarified| CLARIFY["Queue one clarification request"]
+    FIRM -->|No usable offer| TIMER["Fixed waits and timers; eligible silence can trigger one authorized call nudge"]
+    FIRM -->|Yes| TIMER
+    CLARIFY --> OUTREACH["Guarded dispatch uses the email / call flow"]
+    TIMER --> ROUND{"Which scheduled stage?"}
+    ROUND -->|Round 1 remains open| MORE["Wait for written replies"]
+    MORE --> GMAIL
+    ROUND -->|Round 2 begins| LOW["Compare current firm written totals"]
+    LOW --> HIGH{"Seller has a higher total than a genuine competitor?"}
+    HIGH -->|Yes| MATCH["Request revision using the lowest competing written total"]
+    HIGH -->|No| TARGET{"Public target below seller's current total?"}
+    TARGET -->|Yes| COUNTER["Counter once at fixed public target"]
+    TARGET -->|No| NOCOUNTER["No lower-target counter needed"]
+    MATCH --> OUTREACH
+    COUNTER --> OUTREACH
+    OUTREACH --> GMAIL
+    ROUND -->|Round 2 closes| QUAL["Private qualifier evaluates current eligible written offers"]
+    NOCOUNTER --> ENDWAIT["Wait for scheduled round close or new written terms"]
+    ENDWAIT --> QUAL
+    PRIVATE[("In-memory ceiling")]
+    PRIVATE -.-> QUAL
+    QUAL --> RESULT{"Qualifying offer available?"}
+    RESULT -->|Yes| PROPOSE["Create exact-term proposal and request buyer approval"]
+    RESULT -->|No| NEEDS["Needs human review; no automatic purchase"]
+    classDef private fill:#fff3d8,stroke:#b98530,color:#684716
+    classDef review fill:#fff0eb,stroke:#b76f53,color:#743f2a
+    class PRIVATE,QUAL private
+    class REVIEW,WAIT,HUMAN,NEEDS review

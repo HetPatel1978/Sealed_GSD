@@ -1,0 +1,46 @@
+flowchart TB
+    INTENT["Coordinator saves guarded outbound intent to SQLite"] --> READY{"Permissions, private runtime and current terms valid?"}
+    READY -->|No| HOLD["Wait, suppress obsolete intent or request review"]
+    READY -->|Yes| CLAIM["Commit dispatch claim; serialize Fo account before network action"]
+    CLAIM --> CHANNEL{"Authorized channel?"}
+
+    subgraph EMAIL["Email: Fo composes within a public brief"]
+        DRAFT["Ask Fo for draft only: exact routing and public facts"] --> CHECK{"Draft passes routing, disclosure, price-role and commitment checks?"}
+        CHECK -->|No| REVIEW["Pause for review; do not confirm or resend"]
+        CHECK -->|Yes| CONFIRM["Persist checked draft; confirm this email once"]
+        CONFIRM --> SEND["Fo / Wajo sends email; uncertain turn is polled, not resent"]
+        SEND --> AUDIT["Gmail auditor reads actual copy: routing, authentication and brief compliance"]
+        AUDIT --> AUDITOK{"Actual copy verified?"}
+        AUDITOK -->|Pending evidence| OBSERVE["Retain reservation and observe existing attempt"]
+        OBSERVE --> AUDIT
+        AUDITOK -->|Mismatch or uncertain| REVIEW
+        AUDITOK -->|Yes| BIND["Commit safe receipt and trusted RFC / Gmail thread bindings"]
+    end
+
+    subgraph CALL["Call: checked plan followed by one dialing permission"]
+        PLAN["Ask Fo for plan only; no dialing yet"] --> PLANOK{"Exact request, buyer, phone, opening and brief; no call or follow-up started?"}
+        PLANOK -->|No| CALLREVIEW["Reject plan or require review; no dialing permission"]
+        PLANOK -->|Yes| RESERVE["Persist checked plan and pending claim with 30-minute deadline"]
+        RESERVE --> DIAL["Issue one dialing permission; forbid retries, scheduling and extra outreach"]
+        DIAL --> PENDING["Publish call.pending and CALL_IN_PROGRESS"]
+        PENDING --> READ["Read saved Fo conversation only; never dial again"]
+        READ --> FINAL{"Scoped final report available?"}
+        FINAL -->|Still pending or read failure before deadline| READ
+        FINAL -->|Deadline reached or scope / action deviation| FLAG["Retain account reservation; human review"]
+        FINAL -->|Yes| TRANSCRIPT{"Reported identity, transcript, numbers, commitments and follow-ups pass?"}
+        TRANSCRIPT -->|No| FLAG
+        TRANSCRIPT -->|Yes| COMPLETE["Publish call.completed: connected, voicemail, no answer or failed"]
+    end
+
+    CHANNEL -->|Email| DRAFT
+    CHANNEL -->|Call permission also required| PLAN
+    BIND --> SAVE["Commit engine result, public events and checkpoint"]
+    COMPLETE --> SAVE
+    SAVE --> UI["Dashboard receives progress and result events"]
+    COMPLETE --> WAITQUOTE["Await authenticated written quote; spoken prices are not firm offers"]
+    PENDING -.-> RECOVERY["Restart or cancellation: keep observing without another dialing permission"]
+    RECOVERY -.-> READ
+    classDef fo fill:#e4f2e5,stroke:#2f734b,color:#173f2c,stroke-width:2px
+    classDef review fill:#fff0eb,stroke:#b76f53,color:#743f2a
+    class DRAFT,SEND,PLAN,DIAL fo
+    class HOLD,REVIEW,CALLREVIEW,FLAG review

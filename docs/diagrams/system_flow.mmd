@@ -1,0 +1,33 @@
+flowchart TB
+    USER["Buyer enters car, ZIP, deadline, public target and private ceiling"] --> SELLERS["Add sellers manually or use Fo / Wajo research"]
+    SELLERS --> PICK["Verify discovered contacts and select up to five sellers"]
+    PICK --> CONSENT["Authorize reply processing and outreach; calls need extra permission"]
+    CONSENT --> ENGINE["Sealed coordinator and fixed two-round strategy"]
+    ENGINE --> GUARD["Check current facts, routing, allowed prices and action scope"]
+    GUARD --> FO["Fo / Wajo: checked email draft or checked call plan"]
+    FO --> DEALERS["Authorized dealer outreach"]
+    DEALERS --> WRITTEN["Gmail written reply: authenticate sender and link to job"]
+    WRITTEN --> PARSE["Claude extracts terms; code validates evidence"]
+    PARSE --> LEDGER["Written-quote ledger, events and durable checkpoint"]
+    LEDGER --> ROUNDS{"Fixed rounds complete?"}
+    ROUNDS -->|No: clarification, price match or target counter| ENGINE
+    ROUNDS -->|Yes| QUAL["Private qualifier evaluates current firm offers"]
+    USER -->|Private creation or restoration endpoint| VAULT[("In-memory private ceiling")]
+    VAULT -.->|Private input| QUAL
+    VAULT -.-> CHECKER["Private disclosure checker: pass or fail only"]
+    CHECKER -.-> GUARD
+    QUAL --> ELIGIBLE{"Qualifying written offer?"}
+    ELIGIBLE -->|No| REVIEW["Needs human review"]
+    ELIGIBLE -->|Yes| APPROVAL["Buyer reviews evidence and approves exact terms"]
+    APPROVAL -->|Approved| PAPER["Guarded Fo request for purchase paperwork"]
+    PAPER --> CONFIRM["Authenticated written confirmation linked to request; exact approved terms"]
+    CONFIRM --> RECEIPT["Completed: receipt, savings and fee comparison"]
+    APPROVAL -->|Rejected or cancelled| STOP["Wait for a new offer or stop queued actions"]
+    FO -.->|Call status and reported result| PROGRESS["Dashboard progress, dealer history and review alerts"]
+    LEDGER -.->|Replayable SSE events| PROGRESS
+    classDef fo fill:#e4f2e5,stroke:#2f734b,color:#173f2c,stroke-width:2px
+    classDef private fill:#fff3d8,stroke:#b98530,color:#684716
+    classDef review fill:#fff0eb,stroke:#b76f53,color:#743f2a
+    class FO,SELLERS fo
+    class VAULT,CHECKER,QUAL private
+    class REVIEW,STOP review

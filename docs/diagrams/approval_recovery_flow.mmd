@@ -1,0 +1,37 @@
+flowchart TB
+    PROPOSAL["Proposal: seller, quote, total, currency, delivery and flags"] --> USER{"Buyer's decision?"}
+    USER -->|Reject| REJECT["Remember rejected quote; wait for a new firm written offer"]
+    REJECT --> NEW["New written terms may trigger fresh qualification"]
+    USER -->|Cancel| CANCEL["Persist cancellation and stop queued outreach"]
+    CANCEL --> INFLIGHT["Cannot recall external action; keep observing existing call without resuming job"]
+    USER -->|Approve exact terms| FRESH{"Proposal current, quote valid, no pending reconciliation and runtime ready?"}
+    FRESH -->|No| INVALID["Refuse stale approval or request review / private restoration"]
+    FRESH -->|Yes| APPROVED["Persist explicit buyer approval"]
+    APPROVED --> BOOK["Queue guarded paperwork request at exactly approved terms"]
+    BOOK --> SEND["Fo email draft checks, one send and actual Gmail audit"]
+    SEND --> SENT{"Paperwork request safely sent?"}
+    SENT -->|No or uncertain| HOLD["Pause; do not resend or decline other sellers"]
+    SENT -->|Yes| DECLINE["Queue guarded polite declines to other reachable sellers"]
+    SENT -->|Yes| WAIT["Wait for seller's written confirmation"]
+    WAIT --> CONFIRM["Gmail authentication, trusted request linkage and validated confirmation terms"]
+    CONFIRM --> EXACT{"Exact approved seller, total, currency and delivery match?"}
+    EXACT -->|No| MISMATCH["Booking mismatch or missing evidence: review; no completion"]
+    EXACT -->|Yes| DONE["Complete negotiation; receipt, baseline savings, fee comparison and evidence"]
+    DONE --> DISPLAY["Dashboard Receipt tab and final status"]
+
+    subgraph RECOVERY["Persistence and operator recovery"]
+        STATE[("SQLite: public checkpoints, inbox IDs, parse cache, timers, events and outbox")]
+        FO[("Local Fo state: scoped fingerprints, conversations and active reservations")]
+        RESTART["After restart: restore public state; ceiling stays absent until re-entered"]
+        STATE --> RESTART
+        FO --> RESTART
+        RESTART --> OBSERVE["Observe known pending calls; never repeat dialing permission"]
+        RESTART --> RESTORE["Restore private ceiling before eligible new actions; preserve review states"]
+        OPERATOR["Operator checks original call ended and no pending follow-up remains"] --> RELEASE["Exact scoped call-review release; append evidence digest and clear only account reservation"]
+        RELEASE --> NORESUME["Keep original attempt history; do not resend or resume the paused job"]
+    end
+    UNCERTAINCALL["Existing uncertain call reservation"] -.-> OPERATOR
+    classDef fo fill:#e4f2e5,stroke:#2f734b,color:#173f2c,stroke-width:2px
+    classDef review fill:#fff0eb,stroke:#b76f53,color:#743f2a
+    class SEND fo
+    class HOLD,INVALID,MISMATCH,NORESUME review

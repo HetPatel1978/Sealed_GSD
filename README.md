@@ -1,70 +1,171 @@
 # Sealed
 
-Sealed is a negotiation agent built on Wajo's Fo. You describe a job (what, how many, by when), set a target price and a secret ceiling, and either list a few sellers or let Sealed find dealers within 20 miles of your ZIP and pick from its suggestions. Sealed supplies an outreach brief with verified facts and permitted prices; Fo composes emails and handles phone conversations within it. Sealed validates written replies, controls negotiation actions and asks you to approve the winning deal before anything is booked. The ceiling is never sent to Fo, to any seller, or to any LLM. You can see your own target and ceiling on the dashboard; the ceiling reaches it through one private endpoint and never appears in the event stream.
+**Your terms. Your approval.**
 
-## Design
+Find car dealers. Compare written offers. Negotiate toward your target. Keep your maximum price private.
 
-**Current design: [`docs/architecture.md`](docs/architecture.md)** ("sealed envelope": code decides every fact, Fo does the outreach by email and phone, only the qualifier sees the ceiling). Build plan: [`docs/plan.md`](docs/plan.md); decisions: [`docs/decisions.md`](docs/decisions.md); threats: [`docs/threat_model.md`](docs/threat_model.md); Fo MCP facts: [`docs/research/fo_mcp.md`](docs/research/fo_mcp.md).
+> **Powered by Fo from Wajo** - dealer research, natural email composition and authorized phone calls through Wajo's Fo MCP connection.
 
-`docs/sealed_module_io_flow.png` is **superseded** by `docs/architecture.md` (kept for history). `docs/fo_tools.md` is also superseded by `docs/research/fo_mcp.md`.
+[Project report](docs/Sealed_Project_Report.pdf) - [Technical report](docs/Sealed_Progress_Report_2026-10-18.pdf) - [Architecture](docs/architecture.md) - [Setup guide](docs/dashboard.md)
 
-## Layout
+## Why Sealed?
 
+- **Less chasing:** organize dealer replies and follow-ups in one place.
+- **Clearer prices:** request written out-the-door totals, including fees and taxes.
+- **Private limits:** keep your ceiling out of seller communication and AI inputs.
+- **Buyer control:** review the evidence and approve the exact terms.
+
+## Built with Fo + Wajo
+
+| Fo handles | Sealed adds |
+|---|---|
+| Public dealer research | Source checks, approximate 20-mile ZIP-centroid filtering and seller selection |
+| Email composition and delivery | Checked drafts, permitted prices and Gmail sent-copy auditing |
+| Authorized dealer calls | Checked buyer identity, one dialing permission per attempt and result tracking |
+
+**Supporting tools:** Claude extracts quote terms; Gmail supplies written evidence. Sealed's rules control negotiation decisions.
+
+## How it works
+
+1. **Describe the car** - specification, ZIP and deadline.
+2. **Set your prices** - public target and private ceiling.
+3. **Choose up to five sellers** - enter them manually or use Fo research.
+4. **Collect and negotiate** - written quotes, clarification and two fixed rounds.
+5. **Approve the proposal** - review the seller, total, terms and evidence.
+6. **Get confirmation** - matching written confirmation unlocks the final receipt.
+
+## System flow
+
+![Sealed system flow: discovery, Fo outreach, written evidence, negotiation, buyer approval and confirmation](docs/diagrams/system_flow.svg)
+
+[Open full-size diagram](docs/diagrams/system_flow.svg) - [Detailed flows and data boundaries](docs/system_flow.md) - [Editable Mermaid source](docs/diagrams/system_flow.mmd)
+
+The detailed guide includes separate diagrams for discovery, email and calls, quote validation, negotiation, approval and recovery.
+
+## What stays in your control
+
+- **Ceiling:** backend memory only; displayed through a dedicated private endpoint.
+- **Permissions:** research, reply processing, outreach and calls require authorization.
+- **Purchase decision:** exact-term approval before requesting paperwork.
+- **Evidence:** spoken prices never count as firm written offers.
+- **Uncertain actions:** pause for review instead of blindly repeating outreach.
+
+The target is not guaranteed. Negotiation stops after two rounds. Sealed makes no payments.
+
+## Try it locally
+
+**Requirements:** Python 3.11+ and Node.js 22.12+.
+
+<details>
+<summary><strong>First-time setup - Windows PowerShell</strong></summary>
+
+Run from the repository root:
+
+```powershell
+py -3.11 -m venv backend/.venv
+.\backend\.venv\Scripts\python.exe -m pip install -r backend/requirements-dev.txt
+cd frontend
+npm.cmd ci
 ```
-backend/   FastAPI app
-frontend/  dashboard
-docs/      architecture.md (current design), api.md, plan.md, decisions.md, threat_model.md, research/
-mock/      events.json: one full simulated run as an event stream; check_mock.py validates it;
-           ceiling.json + discovery.json: sample responses for the ceiling and discovery endpoints
-spikes/    throwaway experiments, not product code
-```
 
-## Run the backend
+</details>
 
-Python 3.11+. One venv at the repo root (`.venv/`, gitignored) covers the backend, `spikes/` and `mock/`. `requirements-dev.txt` pulls in `requirements.txt` plus test and spike dependencies.
+<details>
+<summary><strong>First-time setup - macOS / Linux</strong></summary>
 
-macOS / Linux:
+Run from the repository root:
 
 ```bash
-python3.11 -m venv .venv            # any python 3.11+ (check with python3 --version)
-source .venv/bin/activate
-pip install -r backend/requirements-dev.txt
-cd backend
-python -m app.run          # binds to 127.0.0.1:8000 only (refuses any other host)
-# http://localhost:8000/health
-pytest
+python3.11 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
+cd frontend
+npm ci
 ```
 
-Windows (PowerShell):
+</details>
+
+**1. Start the backend in simulation mode:**
 
 ```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r backend\requirements-dev.txt
 cd backend
-python -m app.run
-pytest
+$env:SEALED_MODE = 'sim'
+.\.venv\Scripts\python.exe -m app.run
 ```
 
-The API has no login (and `GET /jobs/{id}/ceiling` returns the ceiling), so it is **local only**: it binds to 127.0.0.1, refuses requests from any other machine (403) or with a non-local `Host` header (400), and CORS allows exactly one localhost dashboard origin (`SEALED_DASHBOARD_ORIGIN`, default `http://localhost:3000`). A bad setting stops startup. See `backend/app/security.py`.
+macOS / Linux: from `backend/`, run `SEALED_MODE=sim .venv/bin/python -m app.run`.
 
-Credentials stay local: set `FO_API_KEY` for direct Fo bearer authentication, or leave it blank to use the existing OAuth token file. Gmail and Anthropic credentials load from environment variables. Copy `.env.example` to `.env` and fill it in locally. `.env` and token files are gitignored. See [Fo authentication](docs/fo_adapter.md#authentication).
-
-The Fo adapter's local checks and controlled live email test are documented in [docs/fo_adapter.md](docs/fo_adapter.md). The smoke command is a dry run by default; its state lives in gitignored `.sealed/`.
-
-New job emails use [Fo-composed drafts from briefs](docs/fo_briefs.md), checked for routing, permitted prices, price roles and commitments. Safe rewording and ordinary signatures are allowed. This contract is validated offline; the legacy smoke command and its recorded test retain their original exact-text contract.
-
-[Gmail sent-copy auditing](docs/sent_audit.md) now checks actual routing, authentication and full content, with durable observations and an adapter callback. `python -m sealed.fo.brief_smoke --to consenting-teammate@example.org` prepares a controlled brief test without sending; the new live send still requires explicit approval.
-
-Read-only Gmail reply staging is available separately; see [docs/gmail_ingestion.md](docs/gmail_ingestion.md) for trusted outreach bindings, durable deduplication and pending replies. The [isolated quote parser](docs/quote_parser.md) extracts and validates seller terms with a durable cache. [Durable engine delivery](docs/reply_delivery.md) now commits reply effects and guarded outreach intents before acknowledging inbox items. The [background coordinator](docs/coordinator.md) now connects polling, authorized extraction, durable timers and guarded dispatch; its complete offline demo includes approval, written confirmation and restart replay. The [dashboard and job API](docs/dashboard.md) now provide job intake, streamed activity, approval controls and receipts. The [Fo dealer picker](docs/dealer_discovery.md) supports public research and checked selections before job creation. Reviewed reconciliation remains.
-
-## Frontend
-
-Start the API with `SEALED_MODE=sim`, then run `npm run dev` in `frontend/` and open `http://localhost:3000`. The dashboard defaults to the backend and can complete a synthetic negotiation through explicit approval and written confirmation without live requests. See [startup and live-mode permissions](docs/dashboard.md). `VITE_DATA_SOURCE=mock` selects a read-only recorded preview.
-
-## Mock data
+**2. Start the dashboard in a second terminal:**
 
 ```powershell
-python mock/build_mock.py   # regenerate mock/events.json
-python mock/check_mock.py   # fails if anything looks like a ceiling, or the numbers don't add up
+cd frontend
+npm.cmd run dev
 ```
+
+macOS / Linux: use `npm run dev`.
+
+**3. Open http://localhost:3000:**
+
+- Create a negotiation and select **Start simulation**.
+- Choose **Advance to next decision**, then review and approve the proposal.
+- Advance written confirmation if needed; open the final receipt.
+- Simulation uses synthetic sellers and makes no live integration requests.
+
+**Startup tips:**
+
+- Use the project interpreter from `backend/`; plain `python` may select another environment.
+- Run one backend process. `coordinator_already_running` means another worker owns the state.
+- Keep `VITE_DATA_SOURCE=live` to use the API, including its simulation mode. `mock` is a recorded preview.
+- The API is local only at `127.0.0.1:8000`; there is no user login.
+
+## Connect live services
+
+- Create a root `.env` from [`.env.example`](.env.example) if one does not already exist.
+- Set `FO_API_KEY` for Wajo authentication, or leave it blank for existing OAuth credentials.
+- Configure Gmail and Anthropic credentials locally.
+- Start the backend with `SEALED_MODE=live` and authorize the intended job actions in the dashboard.
+- Keep credentials out of frontend `VITE_*` settings. `.env`, tokens and runtime state are gitignored.
+- Restart after backend/environment changes; restore a job's private ceiling when requested.
+
+Details: [Fo authentication](docs/fo_adapter.md#authentication) - [Live permissions](docs/dashboard.md#live-jobs) - [Call review](docs/call_review.md)
+
+## Current status
+
+| Check | Recorded result |
+|---|---|
+| Backend tests | 586 passed |
+| Frontend tests | 9 passed |
+| Frontend build and lint | Passed |
+| Controlled browser checks | Progress, activity, approval, receipt and tested mobile layouts |
+| Individual live integrations | Controlled email, parsing, authentication and research checks recorded |
+| Remaining live acceptance | Fresh checked-plan call and complete live dashboard negotiation |
+
+**Current limits:**
+
+- Working local prototype; multi-user hosting is not implemented.
+- Public listings do not confirm stock, and ZIP distances are approximate.
+- Fo call evidence is provider-reported; research instructions do not mechanically restrict its tools.
+- Review checks do not prove every natural-language statement correct.
+
+## Documentation
+
+| Topic | Read more |
+|---|---|
+| Problem, objectives and user journey | [Project PDF](docs/Sealed_Project_Report.pdf) - [Markdown](docs/sealed_project_report.md) |
+| Implementation and validation | [Technical PDF](docs/Sealed_Progress_Report_2026-10-18.pdf) - [Markdown](docs/progress_report_2026-10-18.md) |
+| Architecture and decisions | [Architecture](docs/architecture.md) - [Plan](docs/plan.md) - [Decisions](docs/decisions.md) - [Threat model](docs/threat_model.md) |
+| System flow diagrams | [Detailed flows](docs/system_flow.md) - [Overview SVG](docs/diagrams/system_flow.svg) - [Mermaid source](docs/diagrams/system_flow.mmd) |
+| Dashboard and worker | [Dashboard](docs/dashboard.md) - [API](docs/api.md) - [Coordinator](docs/coordinator.md) |
+| Fo + Wajo integration | [Adapter](docs/fo_adapter.md) - [Email briefs](docs/fo_briefs.md) - [Calls](docs/calls.md) - [MCP notes](docs/research/fo_mcp.md) |
+| Research and written evidence | [Discovery](docs/dealer_discovery.md) - [Gmail](docs/gmail_ingestion.md) - [Sent audit](docs/sent_audit.md) - [Parser](docs/quote_parser.md) - [Delivery](docs/reply_delivery.md) |
+
+## Repository map
+
+```text
+backend/    FastAPI, negotiation rules and integrations
+frontend/   React dashboard
+docs/       Reports, architecture and operation guides
+mock/       Synthetic events and sample responses
+spikes/     Historical integration experiments
+```
+
+Historical diagrams and tool notes are superseded by [the current architecture](docs/architecture.md) and [MCP notes](docs/research/fo_mcp.md).

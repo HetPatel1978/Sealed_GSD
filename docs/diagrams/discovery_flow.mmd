@@ -1,0 +1,35 @@
+flowchart TB
+    INPUT["Public input: item, exact specification, US ZIP and 20-mile radius"] --> MODE{"Seller source?"}
+    MODE -->|Manual| MANUAL["Buyer enters known seller contacts"]
+    MODE -->|Discover| ENV{"Backend mode?"}
+    ENV -->|Simulation| SYN["Three synthetic candidates; no Fo or website requests"]
+    ENV -->|Live| CONSENT{"Research permission granted?"}
+    CONSENT -->|No| WAIT["Wait for permission; no research request"]
+    CONSENT -->|Yes| SAVE["Save search identity and claim before provider request"]
+    SAVE --> LOCK{"Fo account available?"}
+    LOCK -->|No| BLOCK["Saved blocked status; review existing account action"]
+    LOCK -->|Yes| FO["Fo / Wajo researches public dealer websites once"]
+    FO --> WORKING{"Result available?"}
+    WORKING -->|Known pending conversation| POLL["Poll existing attempt after wait or restart"]
+    POLL --> WORKING
+    WORKING -->|Unknown or uncertain outcome| REVIEW["Needs review; never blindly resend"]
+    WORKING -->|Completed| FORMAT{"Valid inline dealer report?"}
+    FORMAT -->|No| ONE["At most one distinct formatting follow-up"]
+    ONE --> RECHECK{"Valid report now?"}
+    RECHECK -->|No| REVIEW
+    RECHECK -->|Yes| WEB
+    FORMAT -->|Yes| WEB["Fetch cited public HTTPS pages; check name, address and literal contact evidence"]
+    WEB --> ZIP["Public ZIP-centroid lookup and independent distance calculation"]
+    ZIP --> FILTER["Drop unverifiable contacts, duplicates and candidates beyond 20 miles"]
+    FILTER --> RESULT["Save candidate results; completed result cache lasts one hour"]
+    SYN --> RESULT
+    RESULT --> SELECT["Buyer chooses sellers; published listing is not confirmed stock"]
+    SELECT --> BIND["Check selected contacts, requirements, saved provenance and freshness"]
+    MANUAL --> CREATE["Create public job and store ceiling separately in memory"]
+    BIND --> CREATE
+    CREATE --> START["Creation contacts nobody; separate start authorizations enable negotiation"]
+    BLOCK -.->|After reviewed release: explicit retry only if never attempted| SAVE
+    classDef fo fill:#e4f2e5,stroke:#2f734b,color:#173f2c,stroke-width:2px
+    classDef review fill:#fff0eb,stroke:#b76f53,color:#743f2a
+    class FO fo
+    class REVIEW,BLOCK,WAIT review
