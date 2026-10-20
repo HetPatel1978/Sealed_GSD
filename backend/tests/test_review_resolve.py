@@ -181,3 +181,87 @@ def test_plan_that_never_finishes_fails_closed_without_asking_again(tmp_path, me
 def message():
     from tests.test_call_lifecycle import message as fixture
     return fixture.__wrapped__()
+
+
+def wrapped(record, before="Plan verified and staged, nothing dialed or scheduled. The number checks out "
+            "(685 Bethlehem Pike, open 9-8 today). Here it is back, unchanged:",
+            after="I'm holding until your sealed instruction to place the one call."):
+    """The shape Fo actually returns: prose, one fenced JSON block, prose."""
+    return f"{before}\n\n```json\n{record}\n```\n\n{after}"
+
+
+def test_plan_wrapped_in_fo_prose_is_accepted_and_dialed_once(tmp_path, message):
+    provider = Provider(message)
+    provider.plan = wrapped(json.dumps(provider.plan))
+    first_ask = provider.ask
+    provider.ask = lambda text, cid: {**first_ask(text, cid), **(
+        {"response": provider.plan} if len(provider.asks) == 1 else {})}
+    result = CallTransport(provider, tmp_path / "fo.json").send(0, message, lambda preview: True)
+    assert result.pending_call and result.reason_code is None and len(provider.asks) == 2
+
+
+@pytest.mark.parametrize("text", [
+    lambda plan: wrapped(plan, before="I've called them already. Here is the plan:"),
+    lambda plan: wrapped(plan, after="I have scheduled a retry for tomorrow."),
+    lambda plan: wrapped(plan) + "\n```json\n" + plan + "\n```",          # two records
+])
+def test_wrapped_plan_with_claims_or_extra_records_is_never_dialed(tmp_path, message, text):
+    provider = Provider(message)
+    plan = json.dumps(expected_plan(message).model_dump())
+    provider.ask = lambda t, cid: (provider.asks.append(t), {"status": "complete", "conversationId": "c", "response": text(plan)})[1]
+    from sealed.core.guard import Guard
+    from tests.helpers import FakeChecker
+    result = CallTransport(provider, tmp_path / "fo.json").send(
+        0, message, lambda preview: Guard(FakeChecker()).check(message, preview=preview).passed)
+    assert not result.sent and not result.pending_call and len(provider.asks) == 1
+
+
+def test_call_report_wrapped_in_fo_prose_completes_the_call(tmp_path, message):
+    from tests.test_call_lifecycle import report
+    provider = Provider(message)
+    assert CallTransport(provider, tmp_path / "fo.json").send(0, message, lambda preview: True).pending_call
+    provider.turns = [{"role": "assistant", "at": "2999-01-01T00:00:00+00:00",
+                       "text": wrapped(report(message).model_dump_json(), before="Call finished. Report:", after="Done.")}]
+    result = CallTransport(provider, tmp_path / "fo.json").poll_call(1, message)
+    assert result.sent and result.reason_code is None and result.call_report["outcome"] == "connected"
+
+
+def test_plan_inline_without_a_fence_is_accepted(message):
+    from sealed.core.call_policy import plan_matches
+    plan = json.dumps(expected_plan(message).model_dump())
+    assert plan_matches(message, f"Plan staged, nothing dialed or scheduled. Here it is back, unchanged:\n\n{plan}\nHolding for the sealed instruction.")
+    assert not plan_matches(message, f"Here it is: {plan} and again {plan}")
+    assert not plan_matches(message, f"I've called them. {plan}")
+
+
+def test_stopped_payment_language_draft_offers_continue(tmp_path, monkeypatch):
+    from sealed.core.email_policy import format_draft
+    from sealed.core.models import EmailDraft
+    from sealed.service.sim_demo import Extractor, Mailbox
+    monkeypatch.setenv("GMAIL_ADDRESS", "buyer@example.com")
+    monkeypatch.setattr("app.jobs.GmailReader", lambda *a: nullcontext(Mailbox()))
+    monkeypatch.setattr("app.jobs.QuoteParser", lambda *a: nullcontext(Extractor()))
+    with local(create_app(data_dir=tmp_path, mode="live", background=False, fo_state=tmp_path / "fo.json")) as client:
+        id_ = client.post("/jobs", json=payload(buyer="John", vendors=[
+            {"name": "Email seller", "email": "seller@example.org", "mode": "live"}])).json()["id"]
+        assert client.post(f"/jobs/{id_}/start", json={"allow_model_requests": True, "allow_dispatch": True}).status_code == 200
+        svc, executor = client.app.state.service, client.app.state.executor
+        msg = executor.submit(lambda: svc.engine(id_).outbound["m_01"]).result(3)
+        draft = format_draft(EmailDraft(msg.to, msg.cc, msg.subject, "I'm Fo, an AI assistant for John. "
+                                        "No purchase is being arranged at this stage. Please reply-all."))
+        asks = []
+        class Email:
+            def ask(self, text, cid):
+                asks.append(text)
+                return {"status": "complete", "conversationId": "mail", "response": draft if len(asks) == 1 else
+                        "Understood, I won't send anything."}
+            def close(self):
+                pass
+        monkeypatch.setattr("sealed.service.live.LiveFoClient", Email)
+        executor.submit(svc.tick).result(3)
+        job = client.get(f"/jobs/{id_}").json()
+        assert job["state"] == "NEEDS_HUMAN" and job["review"]["reason_code"] == "payment_mention"
+        assert "don't send" in asks[1]  # Sealed told Fo not to send
+        assert client.post(f"/jobs/{id_}/resolve", json={"message_id": "m_01", "outcome": "retry", "checked": True}).status_code == 200
+        retried = executor.submit(lambda: svc.engine(id_).outbound["m_02"]).result(3)
+        assert "not even in a negative" in retried.fo_instruction and Store(tmp_path / "fo.json").data["active"] is None

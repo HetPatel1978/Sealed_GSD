@@ -219,6 +219,7 @@ export default function App() {
             <p className="muted">{call
               ? `Open the Fo conversation for ${dealerName(review.vendor_id)} and check whether the call was actually placed.`
               : `Check Gmail (you are CC’d) and the Fo conversation for the email to ${dealerName(review.vendor_id)}.`} Then tell Sealed what happened.</p>
+            {review.reason_code === 'payment_mention' && <p className="muted">Sealed told Fo not to send because the draft used payment or purchase wording. If Fo was later told to send it anyway, choose “It was sent”. Trying again asks Fo for a new draft, checked the same way.</p>}
             <label className="check"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} />I checked Fo{call ? '' : ' and Gmail'}, and Fo is not still working on this {call ? 'call' : 'email'} or scheduling a follow-up.</label>
             <div className="actions">
               <button disabled={busy || !reviewChecked} onClick={() => resolve('sent')}>{call ? 'The call happened, continue' : 'It was sent, continue'}</button>

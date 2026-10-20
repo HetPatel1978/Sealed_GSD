@@ -117,6 +117,9 @@ class Coordinator:
         blocking = [e for e in eng.log.of_type("job.needs_human") if e["data"].get("blocking")]
         if msg is None or code not in RESOLVABLE or not blocking:
             return None
+        if code == "payment_mention" and result.get("sent") is not False:
+            return None  # Fo reported sending text with payment language: keep the closer review path
+
         last = blocking[-1]
         if (last["vendor_id"] != msg.dealer_id or last["data"].get("reason_code") != code
                 or last["data"].get("message_id", message_id) != message_id

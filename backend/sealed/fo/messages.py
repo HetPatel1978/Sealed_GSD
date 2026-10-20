@@ -93,7 +93,10 @@ def wrap_email_brief_for_fo(to: str, cc: str, subject: str, brief: str,
         "State each quote or offer in a separate sentence with its role clear. "
         "Use only this brief's facts, even when earlier conversation messages contain additional dates or terms. "
         "For a quote request, ask for a written reply with the total; avoid confirmation, agreement, order or "
-        "payment language, including in disclaimers. If needed, use exactly: No payment is being made by email. "
+        "payment language, including in disclaimers. Except for an approved booking's purchase paperwork, do not use "
+        "the words purchase, payment, paid, deposit, order, checkout or charged anywhere, not even in a negative "
+        "such as 'no purchase is being arranged'. "
+        "If needed, use exactly: No payment is being made by email. "
         "Close the envelope with the literal line EMAIL_DRAFT>>> including all three greater-than characters. "
         "Do not send, schedule reminders, reply again, call, or take any other action without a separate instruction."
     )

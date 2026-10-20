@@ -4,7 +4,8 @@ import re
 import time
 from datetime import datetime, timezone
 
-from sealed.core.call_policy import Plan, Report, audit_report, dial_instruction, parse, plan_matches, request_id
+from sealed.core.call_policy import (DIALED, SCHEDULED, Plan, Report, audit_report, dial_instruction, parse,
+                                     plan_matches, request_id, surrounding)
 from sealed.core.engine import SendResult
 from sealed.core.guard import payload_intact
 from sealed.core.models import outbound_fingerprint
@@ -88,8 +89,10 @@ class CallTransport:
                 text = result.get("response", "")
                 plan = parse(text, Plan)
                 if not plan_matches(msg, text) or not approve_preview(text):
-                    # A valid plan explicitly states no call/task has started.
-                    safe = plan.call_started is False and plan.followups_scheduled is False
+                    # A valid plan explicitly states no call/task has started, and Fo's words agree.
+                    words = surrounding(text)
+                    safe = (plan.call_started is False and plan.followups_scheduled is False
+                            and not DIALED.search(words) and not SCHEDULED.search(words))
                     self.store.set_status(key, "rejected" if safe else "unclear", active=not safe,
                         conversation=cid, reason_code="call_plan_rejected" if safe else "send_unclear")
                     return self._failure(now, "call_plan_rejected" if safe else "send_unclear")
@@ -144,6 +147,8 @@ class CallTransport:
                 return self._failure(now, "call_review")
             return self._pending(now)
         flags = audit_report(msg, report)
+        if SCHEDULED.search(surrounding(text)):
+            flags.append("followup_claimed_outside_report")
         if "call_scope_mismatch" in flags:
             self.store.set_status(key, "unclear", active=True, reason_code="call_review", report=report.model_dump())
             return self._failure(now, "call_review")

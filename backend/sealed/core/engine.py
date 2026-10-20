@@ -61,8 +61,9 @@ NOT_SENT = {
 }
 
 
-# Unclear Fo outcomes the buyer may resolve from the dashboard after checking Fo and Gmail.
-RESOLVABLE = frozenset({"send_unclear", "call_review", "call_result_missing"})
+# Fo outcomes the buyer may resolve from the dashboard after checking Fo and Gmail. A
+# payment_mention qualifies only when Sealed stopped the draft before Fo reported sending.
+RESOLVABLE = frozenset({"send_unclear", "call_review", "call_result_missing", "payment_mention"})
 RESOLUTIONS = {
     "sent": "You confirmed it went out. Recorded as sent; nothing was resent.",
     "retry": "You confirmed it did not go out. Sending it once more.",
@@ -489,6 +490,10 @@ class Engine:
             if again.call_buyer is not None:
                 # The checked call plan is bound to its message ID through the request ID.
                 again = replace(again, fo_instruction=messages.call_plan_request(again))
+            elif again.email_brief is not None:
+                # Same brief and routing, with the current drafting instructions.
+                again = replace(again, fo_instruction=messages.wrap_email_brief_for_fo(
+                    again.to, again.cc, again.subject or "", again.body, again.reply_to_message_id))
             t = self._submit(t, again, None)
         return t
 

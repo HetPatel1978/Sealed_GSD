@@ -62,15 +62,47 @@ def expected_plan(msg):
                 followups_scheduled=False, max_calls=1)
 
 
+# Fo often wraps the record in a sentence or two, with or without a ```json fence. Exactly one
+# JSON object is accepted; the words around it are checked separately for action claims.
+# Positive claims in that surrounding text ("nothing dialed" is not one).
+DIALED = re.compile(r"\b(?:i(?:'ve| have)?\s+(?:called|dialed|dialled|phoned|placed|started)|calling\s+(?:them|now)|dialing\b)", re.I)
+SCHEDULED = re.compile(r"\b(?:i(?:'ve| have)?\s+(?:scheduled|set up)|scheduling\s+(?:the\s+)?retry)\b", re.I)
+
+
+def _objects(value):
+    """Spans of top-level JSON objects embedded in text."""
+    decoder, spans, i = json.JSONDecoder(), [], 0
+    while (i := value.find("{", i)) != -1:
+        try:
+            _, end = decoder.raw_decode(value, i)
+        except ValueError:
+            i += 1
+            continue
+        spans.append((i, end))
+        i = end
+    return spans
+
+
+def _record_text(value):
+    spans = _objects(value)
+    if len(spans) != 1:
+        raise ValueError("invalid_call_record")
+    return value[slice(*spans[0])]
+
+
+def surrounding(text):
+    """Fo's own words outside the embedded record, for claim checks."""
+    if not isinstance(text, str):
+        return ""
+    for start, end in reversed(_objects(text)):
+        text = text[:start] + " " + text[end:]
+    return text
+
+
 def parse(text, model):
     if not isinstance(text, str) or len(text) > 200_000:
         raise ValueError("invalid_call_record")
-    value = text.strip()
-    if value.startswith("```"):
-        match = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)\s*```", value)
-        if not match:
-            raise ValueError("invalid_call_record")
-        value = match[1]
+    value = _record_text(text.strip())
     def unique(pairs):
         result = {}
         for key, item in pairs:
@@ -83,7 +115,8 @@ def parse(text, model):
 
 def plan_matches(msg, text):
     try:
-        return parse(text, Plan) == expected_plan(msg)
+        claimed = DIALED.search(surrounding(text)) or SCHEDULED.search(surrounding(text))
+        return not claimed and parse(text, Plan) == expected_plan(msg)
     except ValueError:
         return False
 
